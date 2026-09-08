@@ -4,9 +4,10 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
-
 
 @Entity
 @Table(
@@ -20,7 +21,6 @@ import java.time.LocalDateTime;
 @Setter
 @NoArgsConstructor
 public class PackageEntity {
-
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -49,7 +49,25 @@ public class PackageEntity {
     @Column(nullable = false)
     private String status = "Active"; // Active / Inactive
 
-    @Lob
+    /**
+     * FIXED: was previously annotated @Lob. On Postgres, @Lob on a String
+     * field makes Hibernate treat this as a CLOB, which is read through
+     * Postgres's Large Object API (lo_open/lo_read). That API requires an
+     * active transaction with autocommit OFF — but plain read methods like
+     * PackageService.getAllPackages() have no @Transactional, so they run
+     * under Hikari's default autocommit=true. Every GET /api/packages call
+     * was therefore guaranteed to fail with:
+     *
+     *   org.postgresql.util.PSQLException: Large Objects may not be used
+     *   in auto-commit mode.
+     *
+     * The DB column is just `TEXT`, which Postgres treats identically to
+     * VARCHAR — there is no reason to route it through the Large Object
+     * subsystem at all. @JdbcTypeCode(SqlTypes.LONGVARCHAR) tells Hibernate
+     * to read/write this column with plain setString()/getString() calls
+     * instead, exactly like `description` above, avoiding LO entirely.
+     */
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
     @Column(name = "permissions_json", columnDefinition = "TEXT")
     private String permissionsJson; // stores Category>Feature>Permission tree as JSON
 
@@ -59,7 +77,6 @@ public class PackageEntity {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    
     @Version
     @Column(nullable = false)
     private Long version = 0L;

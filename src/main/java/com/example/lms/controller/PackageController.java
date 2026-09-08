@@ -1,5 +1,4 @@
 package com.example.lms.controller;
-
 import com.example.lms.dto.PackageAssignmentDto;
 import com.example.lms.dto.PackageDto;
 import com.example.lms.service.PackageService;
@@ -11,16 +10,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
-
 import java.util.List;
-
 
 @RestController
 @RequestMapping("/api/packages")
 public class PackageController {
-
     private final PackageService packageService;
-
     public PackageController(PackageService packageService) {
         this.packageService = packageService;
     }
@@ -46,10 +41,16 @@ public class PackageController {
     }
 
     /**
-     * Doc06 Field #1 (Search by Package Name) and Field #2 (Filter:
-     * All Packages / Active / Inactive). `status` omitted or "All" means no
-     * status filter. Paginated - see PackageRepository#search.
+     * Bulk lookup so the Admin List page (User rows from SignUpController,
+     * each carrying a packageId) can resolve package name/price/billingCycle
+     * for every row in one round trip instead of one call per admin.
      */
+    @GetMapping("/by-ids")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
+    public ResponseEntity<List<PackageDto.Response>> getByIds(@RequestParam List<Long> ids) {
+        return ResponseEntity.ok(packageService.getPackagesByIds(ids));
+    }
+
     @GetMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
     public ResponseEntity<Page<PackageDto.Response>> getAll(
@@ -66,21 +67,12 @@ public class PackageController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * Doc07 Field #1 / §6 Dependencies: the predefined feature catalog the
-     * Admin Permission matrix is rendered from.
-     */
     @GetMapping("/features")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
     public ResponseEntity<List<PackageDto.FeatureCatalogEntry>> getFeatureCatalog() {
         return ResponseEntity.ok(packageService.getFeatureCatalog());
     }
 
-    /**
-     * Doc06 Fields #19-22 - the "Update Package" popup: assign an existing
-     * package to a registered user by Email ID. Distinct from PUT /{id},
-     * which edits a package's own master-data fields.
-     */
     @PostMapping("/assign")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<Void> assign(@Valid @RequestBody PackageAssignmentDto request) {

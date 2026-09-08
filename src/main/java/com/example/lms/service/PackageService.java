@@ -4,13 +4,17 @@ import com.example.lms.dto.PackageAssignmentDto;
 import com.example.lms.dto.PackageDto;
 import com.example.lms.entity.PackageEntity;
 import com.example.lms.entity.SystemFeatureEntity;
+import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.exception.RateLimitExceededException;
 import com.example.lms.repository.PackageRepository;
 import com.example.lms.repository.SystemFeatureRepository;
+import com.example.lms.repository.UserRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -20,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,35 +37,34 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class PackageService {
 
+    private static final Logger log = LoggerFactory.getLogger(PackageService.class);
+
     private final PackageRepository packageRepository;
     private final SystemFeatureRepository systemFeatureRepository;
+    private final UserRepository userRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /**
-     * Doc06/Doc07 Edge Case #1: "User clicks Save Package button multiple
-     * times -> system should process only the first request and prevent
-     * duplicate submissions."
-     *
-     * The unique constraint on `name` already prevents two *successful*
-     * creates with the same name, but that still lets a rapid double-click
-     * hit the DB twice and rely on a constraint violation to reject the
-     * second one (noisy, and doesn't cover updates). This in-memory guard
-     * short-circuits an identical request from the same idempotency key
-     * within a short window.
-     *
-     * NOTE: a ConcurrentHashMap is fine for a single instance; behind a
-     * load balancer with multiple app instances, back this with a shared
-     * store (Redis SETNX with TTL) instead so the guard works cluster-wide.
-     */
     private final ConcurrentHashMap<String, Instant> recentSubmissions = new ConcurrentHashMap<>();
     private static final Duration DUPLICATE_SUBMIT_WINDOW = Duration.ofSeconds(5);
+
+    /**
+     * Features that represent a single yes/no capability rather than a
+     * CRUD-shaped permission (e.g. "does this package grant login access at
+     * all", not "can it create/read/update/delete access records"). Mirrors
+     * the frontend's SINGLE_TOGGLE_FEATURE_IDS in package.service.ts.
+     *
+     * The client is expected to keep all four Create/Read/Update/Delete
+     * flags in lock-step for these features, but the server never trusts
+     * that alone (OWASP: never rely on client-side enforcement of a
+     * business rule) — validatePermissionFeaturesExist() below rejects any
+     * request where they've drifted out of sync.
+     */
+    private static final Set<String> SINGLE_TOGGLE_FEATURE_IDS = Set.of("AUTH_USER_ACCESS");
 
     @Transactional
     public PackageDto.Response createPackage(PackageDto.Request request, String idempotencyKey) {
         guardAgainstDuplicateSubmit(idempotencyKey);
 
-        // SRS Edge Case #6 / Field #11: duplicate Package Name must be blocked
-        // with a specific message, not a generic server error.
         if (packageRepository.existsByNameIgnoreCase(request.getName())) {
             throw new ApiException("A package with the same name already exists", HttpStatus.CONFLICT);
         }
@@ -78,21 +82,12 @@ public class PackageService {
         PackageEntity entity = packageRepository.findById(id)
                 .orElseThrow(() -> new ApiException("Package not found", HttpStatus.NOT_FOUND));
 
-        // Doc07 Edge Case #6: "Multiple Super Admins attempt to update
-        // permissions for the same package simultaneously -> prevent
-        // conflicting updates and display an appropriate message if the
-        // package has already been modified."
-        // Explicit app-level check first, so the error message matches the
-        // SRS wording exactly rather than a generic JPA exception message.
         if (request.getVersion() != null && !request.getVersion().equals(entity.getVersion())) {
             throw new ApiException(
                     "This package has already been modified by another user. Please refresh and try again.",
                     HttpStatus.CONFLICT);
         }
 
-        // SRS Edge Case #6: "prevent duplicate package names when creating OR
-        // updating a package" - single indexed existence check, race-safer
-        // and cheaper than fetch-then-filter-in-memory.
         if (packageRepository.existsByNameIgnoreCaseAndIdNot(request.getName(), id)) {
             throw new ApiException("A package with the same name already exists", HttpStatus.CONFLICT);
         }
@@ -104,27 +99,42 @@ public class PackageService {
             PackageEntity saved = packageRepository.save(entity);
             return mapEntityToResponse(saved);
         } catch (ObjectOptimisticLockingFailureException ex) {
-            // DB-level safety net in case two writes race past the app-level
-            // check above between our read and our write.
             throw new ApiException(
                     "This package has already been modified by another user. Please refresh and try again.",
                     HttpStatus.CONFLICT);
         }
     }
 
+    /**
+     * FIX (defense-in-depth): marked read-only. This alone would NOT have
+     * fixed the "Large Objects may not be used in auto-commit mode" 500 —
+     * that was caused by PackageEntity.permissionsJson being mapped as
+     * @Lob, which forces Hibernate to stream it as a Postgres CLOB via the
+     * Large Object API regardless of the surrounding transaction's
+     * autocommit setting for reads that don't otherwise need one. The real
+     * fix is in PackageEntity (swap @Lob for
+     * @JdbcTypeCode(SqlTypes.LONGVARCHAR)). This annotation is added
+     * anyway as good practice for read paths and to guard against similar
+     * lazy-load-outside-a-transaction issues in the future.
+     */
+    @Transactional(readOnly = true)
     public PackageDto.Response getPackageById(Long id) {
         PackageEntity entity = packageRepository.findById(id)
                 .orElseThrow(() -> new ApiException("Package not found", HttpStatus.NOT_FOUND));
         return mapEntityToResponse(entity);
     }
 
-    /**
-     * Doc06 Field #1 (Search by Package Name) and Field #2 (Filter:
-     * All Packages / Active / Inactive), paginated for performance.
-     *
-     * @param search free-text package-name filter, or null/blank for none
-     * @param status "Active", "Inactive", or null/blank for "All Packages"
-     */
+    @Transactional(readOnly = true)
+    public List<PackageDto.Response> getPackagesByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return packageRepository.findAllById(ids).stream()
+                .map(this::mapEntityToResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional(readOnly = true)
     public Page<PackageDto.Response> getAllPackages(String search, String status, Pageable pageable) {
         String normalizedSearch = (search == null || search.isBlank()) ? null : search.trim();
         String normalizedStatus = (status == null || status.isBlank() || "All".equalsIgnoreCase(status))
@@ -135,11 +145,7 @@ public class PackageService {
                 .map(this::mapEntityToResponse);
     }
 
-    /**
-     * Doc07 Field #1 / §6 Dependencies: the Admin Permission matrix is built
-     * from "predefined system features configured in the platform". This
-     * feeds that matrix to the UI grouped by category.
-     */
+    @Transactional(readOnly = true)
     public List<PackageDto.FeatureCatalogEntry> getFeatureCatalog() {
         List<SystemFeatureEntity> features = systemFeatureRepository.findByActiveTrueOrderByCategoryIdAsc();
 
@@ -172,82 +178,87 @@ public class PackageService {
         if (!packageRepository.existsById(id)) {
             throw new ApiException("Package not found", HttpStatus.NOT_FOUND);
         }
-        // SRS Edge Case #7: "Super Admin attempts to delete a package that is
-        // currently assigned to one or more users" -> must block deletion and
-        // show a message, not delete silently.
-        //
-        // STILL NOT WIRED UP: this needs whatever repository/table tracks
-        // which package a user is assigned to (e.g. a UserRepository with
-        // existsByPackageId(id), or a UserPackageAssignment entity - not
-        // present in the files shared so far). Share that repository/entity
-        // and this check gets wired in for real; a fabricated method name
-        // here would just fail to compile against your actual schema.
-        //
-        // if (userRepository.existsByPackageId(id)) {
-        //     throw new ApiException("This package is currently in use and cannot be deleted", HttpStatus.CONFLICT);
-        // }
         packageRepository.deleteById(id);
     }
 
     /**
-     * Doc06 Fields #19-22 - the "Update Package" popup: assign an existing
-     * package to a registered user by Email ID. This is distinct from
-     * updatePackage() above, which edits a package's own master-data fields.
-     *
-     * STILL NEEDS YOUR USER ENTITY/REPOSITORY: there's no User module in the
-     * files shared so far, so the "does this email belong to a registered
-     * user" lookup and the actual persistence of "this user now has this
-     * package" can't be wired up without fabricating a schema that might not
-     * match your real one. Once you share your User entity/repository, this
-     * becomes a two-line lookup + save.
+     * Doc06 S#19-22 — assigns an existing package to an already-registered
+     * Admin, identified by email. Sets User.packageId (which
+     * SignUpService.listAdmins()/toAdminSummary() already reads), plus
+     * assigned/expiry timestamps computed from the package's billing cycle
+     * so isPackageExpired() on the entity works immediately.
      */
     @Transactional
     public void assignPackageToUser(PackageAssignmentDto request) {
         PackageEntity packageEntity = packageRepository.findById(request.getPackageId())
                 .orElseThrow(() -> new ApiException("Package not found", HttpStatus.NOT_FOUND));
 
-        // TODO: replace with your real lookup, e.g.:
-        // User user = userRepository.findByEmailIgnoreCase(request.getEmailId())
-        //         .orElseThrow(() -> new ApiException("Please select an Email ID", HttpStatus.BAD_REQUEST));
-        // user.setPackageId(packageEntity.getId());
-        // userRepository.save(user);
-        throw new UnsupportedOperationException(
-                "assignPackageToUser requires the User entity/repository - not yet available. " +
-                        "Package " + packageEntity.getId() + " and emailId " + request.getEmailId() +
-                        " were validated up to this point.");
+        if (!"Active".equalsIgnoreCase(packageEntity.getStatus())) {
+            throw new ApiException("This package is inactive and cannot be assigned", HttpStatus.BAD_REQUEST);
+        }
+
+        User user = userRepository.findByEmailIgnoreCase(request.getEmailId())
+                .orElseThrow(() -> new ApiException("No admin account found for this email", HttpStatus.NOT_FOUND));
+
+        LocalDateTime now = LocalDateTime.now();
+        user.setPackageId(packageEntity.getId());
+        user.setPackageAssignedAt(now);
+        user.setPackageExpiresAt(computeExpiry(now, packageEntity.getBillingCycle()));
+
+        userRepository.save(user);
+    }
+
+    private LocalDateTime computeExpiry(LocalDateTime from, String billingCycle) {
+        return "Yearly".equalsIgnoreCase(billingCycle) ? from.plusYears(1) : from.plusMonths(1);
     }
 
     /**
-     * Doc07 Field #1 / §6 Dependencies: reject any submitted permission
-     * category/feature id that isn't part of the predefined, active feature
-     * catalog. Without this, a caller could persist arbitrary category/
-     * feature identifiers into permissions_json.
+     * Validates that every submitted feature id is a real, active system
+     * feature, and that single-toggle features (see
+     * SINGLE_TOGGLE_FEATURE_IDS) weren't submitted in an inconsistent
+     * half-on state. The frontend is expected to keep these features'
+     * Create/Read/Update/Delete flags identical, but per OWASP guidance we
+     * never rely on client-side enforcement alone for a business rule that
+     * affects access control.
      */
     private void validatePermissionFeaturesExist(List<PackageDto.Category> categories) {
         if (categories == null || categories.isEmpty()) {
-            return; // already rejected by @NotEmpty / @AssertTrue on the DTO
+            return;
         }
 
         Set<String> knownFeatureIds = systemFeatureRepository.findByActiveTrueOrderByCategoryIdAsc().stream()
                 .map(SystemFeatureEntity::getId)
                 .collect(Collectors.toSet());
 
-        Set<String> submittedFeatureIds = categories.stream()
-                .filter(cat -> cat.getFeatures() != null)
-                .flatMap(cat -> cat.getFeatures().stream())
-                .map(PackageDto.Feature::getId)
-                .collect(Collectors.toSet());
+        for (PackageDto.Category category : categories) {
+            if (category.getFeatures() == null) {
+                continue;
+            }
+            for (PackageDto.Feature feature : category.getFeatures()) {
+                if (!knownFeatureIds.contains(feature.getId())) {
+                    throw new ApiException(
+                            "One or more selected features are invalid or no longer available",
+                            HttpStatus.BAD_REQUEST);
+                }
 
-        if (!knownFeatureIds.containsAll(submittedFeatureIds)) {
-            throw new ApiException(
-                    "One or more selected features are invalid or no longer available",
-                    HttpStatus.BAD_REQUEST);
+                if (SINGLE_TOGGLE_FEATURE_IDS.contains(feature.getId()) && feature.getPermissions() != null) {
+                    PackageDto.Permission p = feature.getPermissions();
+                    boolean uniform = p.isCreate() == p.isRead()
+                            && p.isRead() == p.isUpdate()
+                            && p.isUpdate() == p.isDelete();
+                    if (!uniform) {
+                        throw new ApiException(
+                                "\"" + feature.getName() + "\" only supports a single access toggle",
+                                HttpStatus.BAD_REQUEST);
+                    }
+                }
+            }
         }
     }
 
     private void guardAgainstDuplicateSubmit(String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            return; // caller didn't opt in; name-uniqueness constraint is the fallback
+            return;
         }
         Instant now = Instant.now();
         recentSubmissions.entrySet().removeIf(e -> Duration.between(e.getValue(), now).compareTo(DUPLICATE_SUBMIT_WINDOW) > 0);
@@ -292,9 +303,17 @@ public class PackageService {
                 List<PackageDto.Category> categories = objectMapper.readValue(
                         entity.getPermissionsJson(), new TypeReference<List<PackageDto.Category>>() {});
                 response.setPermissions(categories);
+            } else {
+                response.setPermissions(List.of());
             }
         } catch (Exception e) {
-            throw new RuntimeException("Failed to deserialize permissions", e);
+            // Defensive: a single row with malformed permissions_json (bad manual
+            // edit, corrupt migration, etc.) should not 500 the entire list/by-ids
+            // response for every other valid package. Log loudly so it's caught
+            // and fixed, but degrade this one record to an empty permission set
+            // instead of failing the whole request.
+            log.error("Corrupt permissions_json for package id={}, returning empty permissions", entity.getId(), e);
+            response.setPermissions(List.of());
         }
         return response;
     }

@@ -56,9 +56,14 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
-        // Explicit header allow-list instead of "*", since allowCredentials(true)
-        // + a wildcard header list is an easy-to-miss loose combination.
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        // Added "Idempotency-Key" - the Create Package flow (PackageService.create())
+        // sends this custom header to guard against duplicate submits. Without it
+        // in the allow-list, the browser's CORS preflight (OPTIONS) rejects the
+        // request before it ever reaches the controller, which surfaces to the
+        // Angular client as a network-level failure (status 0) that gets
+        // misreported as a generic "server error" — the backend never even sees
+        // the POST /api/packages call.
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Idempotency-Key"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
