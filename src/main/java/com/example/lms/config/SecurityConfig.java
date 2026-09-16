@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -31,21 +32,11 @@ public class SecurityConfig {
     @Value("${app.security.bcrypt-strength:12}")
     private int bcryptStrength;
 
-    // FIXED: was @Value("${app.cors.allowed-origins}") with no default,
-    // which is a REQUIRED placeholder - Spring refuses to start the whole
-    // context if it's not set anywhere in your config (this is exactly
-    // what crashed securityConfig bean creation). A localhost + prod-frontend
-    // default is safe to ship (it's not a secret, unlike app.jwt.secret which
-    // deliberately has no default) - override it via
-    // app.cors.allowed-origins in application.yml/properties or the
-    // APP_CORS_ALLOWED_ORIGINS env var (comma-separated) for staging/prod.
     @Value("${app.cors.allowed-origins:http://localhost:4200,https://vativa-lms.netlify.app}")
     private List<String> allowedOrigins;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Required by SignUpService / LoginService (constructor-injected) to
-    // hash and verify passwords with BCrypt.
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder(bcryptStrength);
@@ -56,13 +47,6 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
-        // Added "Idempotency-Key" - the Create Package flow (PackageService.create())
-        // sends this custom header to guard against duplicate submits. Without it
-        // in the allow-list, the browser's CORS preflight (OPTIONS) rejects the
-        // request before it ever reaches the controller, which surfaces to the
-        // Angular client as a network-level failure (status 0) that gets
-        // misreported as a generic "server error" — the backend never even sees
-        // the POST /api/packages call.
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Idempotency-Key"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
@@ -78,7 +62,6 @@ public class SecurityConfig {
                                             RateLimitingFilter rateLimitingFilter) throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .headers(headers -> headers
@@ -92,6 +75,14 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
+                        // NEW - the invited person isn't logged in yet when the
+                        // signup page reads invite details, and isn't logged in
+                        // when completing signup either. Sending an invite
+                        // (POST /api/invites, no path suffix) is NOT covered by
+                        // these matchers and stays behind anyRequest().authenticated()
+                        // + the controller's @PreAuthorize.
+                        .requestMatchers(HttpMethod.GET, "/api/invites/*").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/invites/*/accept").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .anyRequest().authenticated()
@@ -104,12 +95,7 @@ public class SecurityConfig {
                 )
                 .httpBasic(basic -> basic.disable())
                 .formLogin(form -> form.disable())
-                // Rate limiting runs first so an abusive client is rejected
-                // before it ever reaches JWT parsing or the DB.
                 .addFilterBefore(rateLimitingFilter, UsernamePasswordAuthenticationFilter.class)
-                // Wires JwtAuthenticationFilter into the chain - without this,
-                // JwtUtil is never invoked on incoming requests and every
-                // protected endpoint 401s even with a valid token.
                 .addFilterAfter(jwtAuthenticationFilter, RateLimitingFilter.class);
         return http.build();
     }

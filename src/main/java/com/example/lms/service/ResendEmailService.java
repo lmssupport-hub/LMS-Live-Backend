@@ -96,10 +96,40 @@ public class ResendEmailService implements PasswordResetEmailService {
         }
     }
 
-    /** Retry on network-level failures and 5xx; never on 4xx (bad key, bad payload won't fix itself). */
+    // NEW - used by InviteService for the "Invite People" flow. Same
+    // webClient/retry/timeout plumbing as sendResetLinkEmail above.
+    @Override
+    public void sendInviteEmail(String toEmail, String signupLink, String roleName, int expiryMinutes) {
+        String subject = "You're invited to join the team on LMS";
+        String html = buildInviteHtml(signupLink, roleName, expiryMinutes);
+        Map<String, Object> payload = Map.of(
+                "from", fromName + " <" + fromEmail + ">",
+                "to", new String[]{toEmail},
+                "subject", subject,
+                "html", html
+        );
+
+        try {
+            webClient.post()
+                    .uri("")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .bodyValue(payload)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .retryWhen(Retry.backoff(maxRetries, Duration.ofMillis(300))
+                            .filter(this::isRetryable))
+                    .block(Duration.ofMillis(timeoutMs * (maxRetries + 1)));
+        } catch (Exception e) {
+            log.error("Resend invite email dispatch failed for {}: {}", maskEmail(toEmail), e.getMessage());
+            throw new ApiException("Unable to send the invite. Please try again later.",
+                    HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
     private boolean isRetryable(Throwable throwable) {
         if (throwable instanceof WebClientRequestException) {
-            return true; // connection refused, DNS failure, timeout, etc.
+            return true;
         }
         if (throwable instanceof WebClientResponseException responseException) {
             return responseException.getStatusCode().is5xxServerError();
@@ -107,7 +137,6 @@ public class ResendEmailService implements PasswordResetEmailService {
         return false;
     }
 
-    /** j***@example.com style masking - enough for correlating log lines without exposing the full address. */
     private String maskEmail(String email) {
         if (email == null || email.isBlank()) {
             return "[unknown]";
@@ -129,6 +158,20 @@ public class ResendEmailService implements PasswordResetEmailService {
                 + "<p>Or copy and paste this link into your browser:<br>" + resetLink + "</p>"
                 + "<p>This link expires in " + expiryMinutes + " minutes. "
                 + "If you did not request this, you can ignore this email.</p>"
+                + "</div>";
+    }
+
+    private String buildInviteHtml(String signupLink, String roleName, int expiryMinutes) {
+        int expiryHours = Math.max(1, expiryMinutes / 60);
+        return "<div style=\"font-family:sans-serif\">"
+                + "<h2>You're invited</h2>"
+                + "<p>You've been invited to join the team as <b>" + roleName + "</b>.</p>"
+                + "<p><a href=\"" + signupLink + "\" "
+                + "style=\"display:inline-block;padding:10px 20px;background:#2563eb;"
+                + "color:#ffffff;text-decoration:none;border-radius:6px;\">Accept Invite &amp; Sign Up</a></p>"
+                + "<p>Or copy and paste this link into your browser:<br>" + signupLink + "</p>"
+                + "<p>This link expires in " + expiryHours + " hours. "
+                + "If you weren't expecting this, you can ignore this email.</p>"
                 + "</div>";
     }
 }

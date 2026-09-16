@@ -51,27 +51,37 @@ public class User {
     @Builder.Default
     private Boolean active = true;
 
-    
     @Column(name = "package_id")
     private Long packageId;
 
-    
     @Column(name = "package_assigned_at")
     private LocalDateTime packageAssignedAt;
 
     @Column(name = "package_expires_at")
     private LocalDateTime packageExpiresAt;
 
-    
     @Column(name = "failed_login_attempts", nullable = false,
             columnDefinition = "integer not null default 0")
     @Builder.Default
     private Integer failedLoginAttempts = 0;
 
-    // NEW - set to "now + lockout duration" once failedLoginAttempts hits
-    // the configured threshold; cleared on successful login. Null = not locked.
     @Column(name = "locked_until")
     private LocalDateTime lockedUntil;
+
+    // NEW - set only for team members created via an invite (InviteEntity /
+    // InviteService). Points at the ADMIN who invited them. This is how
+    // multi-company scoping works: an admin's team = every User whose
+    // companyAdminId == that admin's own id. Null for the admin's own
+    // self-signup account (SignUpService).
+    @Column(name = "company_admin_id")
+    private Long companyAdminId;
+
+    // NEW - FK to RoleEntity.id, the custom Role (Role Management) granted
+    // at invite time. `role` (String) is kept in sync with RoleEntity.name
+    // so existing @PreAuthorize("hasRole(...)") checks keep working as-is;
+    // roleId is for resolving the fine-grained permission set via RoleService.
+    @Column(name = "role_id")
+    private Long roleId;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -101,9 +111,6 @@ public class User {
         return lockedUntil != null && LocalDateTime.now().isBefore(lockedUntil);
     }
 
-    // NEW - convenience check used by permission-gating logic: a package
-    // with no expiry (packageExpiresAt == null) never counts as expired;
-    // otherwise it's expired once "now" passes that timestamp.
     @Transient
     public boolean isPackageExpired() {
         return packageExpiresAt != null && LocalDateTime.now().isAfter(packageExpiresAt);
