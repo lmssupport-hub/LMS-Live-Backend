@@ -53,6 +53,7 @@ public class SecurityConfig {
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", configuration);
+        source.registerCorsConfiguration("/uploads/**", configuration);
         return source;
     }
 
@@ -83,6 +84,14 @@ public class SecurityConfig {
                         // + the controller's @PreAuthorize.
                         .requestMatchers(HttpMethod.GET, "/api/invites/*").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/invites/*/accept").permitAll()
+                        // NEW - course thumbnails are rendered via plain <img src="...">
+                        // tags in the UI, which never carry the Authorization header the
+                        // Angular HttpClient interceptor attaches (that interceptor only
+                        // runs for HttpClient requests, not native <img>/<video> fetches).
+                        // Requiring auth here just meant every thumbnail 401'd and showed
+                        // as a broken image, so these static files are made public - only
+                        // the thumbnail files themselves are exposed, not any API data.
+                        .requestMatchers(HttpMethod.GET, "/uploads/**").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .anyRequest().authenticated()

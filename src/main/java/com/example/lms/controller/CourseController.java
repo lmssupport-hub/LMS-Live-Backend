@@ -5,8 +5,10 @@ import com.example.lms.dto.CourseDto;
 import com.example.lms.service.CourseService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -20,32 +22,31 @@ public class CourseController {
         this.courseService = courseService;
     }
 
-    @PostMapping
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> createCourse(
-            @Valid @RequestBody CourseDto.CourseRequest request) {
-        CourseDto.CourseResponse created = courseService.createCourse(request);
+            @RequestPart("course") @Valid CourseDto.CourseRequest request,
+            @RequestPart(value = "thumbnail", required = false) MultipartFile thumbnail) {
+        CourseDto.CourseResponse created = courseService.createCourse(request, thumbnail);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Course created successfully.", created));
     }
 
     @GetMapping
     public ResponseEntity<ApiResponse<List<CourseDto.CourseResponse>>> getAllCourses() {
-        List<CourseDto.CourseResponse> courses = courseService.getAllCourses();
-        return ResponseEntity.ok(ApiResponse.success("Courses fetched successfully.", courses));
+        return ResponseEntity.ok(ApiResponse.success("Courses fetched successfully.", courseService.getAllCourses()));
     }
 
     @GetMapping("/{courseId}")
-    public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> getCourseById(
-            @PathVariable Long courseId) {
-        CourseDto.CourseResponse course = courseService.getCourseById(courseId);
-        return ResponseEntity.ok(ApiResponse.success("Course fetched successfully.", course));
+    public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> getCourseById(@PathVariable Long courseId) {
+        return ResponseEntity.ok(ApiResponse.success("Course fetched successfully.", courseService.getCourseById(courseId)));
     }
 
-    @PutMapping("/{courseId}")
+    @PutMapping(value = "/{courseId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> updateCourse(
             @PathVariable Long courseId,
-            @Valid @RequestBody CourseDto.CourseRequest request) {
-        CourseDto.CourseResponse updated = courseService.updateCourse(courseId, request);
+            @RequestPart("course") @Valid CourseDto.CourseRequest request,
+            @RequestPart(value = "thumbnail", required = false) MultipartFile thumbnail) {
+        CourseDto.CourseResponse updated = courseService.updateCourse(courseId, request, thumbnail);
         return ResponseEntity.ok(ApiResponse.success("Course updated successfully.", updated));
     }
 

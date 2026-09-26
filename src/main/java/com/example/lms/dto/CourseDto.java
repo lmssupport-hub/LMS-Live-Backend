@@ -1,58 +1,46 @@
 package com.example.lms.dto;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import jakarta.validation.constraints.*;
+import lombok.*;
 
 import java.time.LocalDateTime;
 
 public class CourseDto {
 
-    // Create / Update Course form body
-    @Getter
-    @Setter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    @Builder
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
     public static class CourseRequest {
 
         @NotBlank(message = "Course Name is required.")
+        @Size(min = 3, max = 100, message = "Course Name must be between 3 and 100 characters.")
         private String name;
 
-        @NotBlank(message = "Course Category is required")
-        private String category;
+        @Size(max = 1000, message = "Course Description must not exceed 1000 characters")
+        private String description;
+
+        @NotNull(message = "Course Category is required")
+        private Integer categoryId;
 
         @NotNull(message = "Instructor selection is required")
         private Long instructorId;
 
         @NotBlank(message = "Course Level is required")
-        private String courseLevel;
+        private String level;       // BEGINNER / INTERMEDIATE / ADVANCED
 
-        // Optional per SRS - max 1000 characters
-        @Size(max = 1000, message = "Course Description must not exceed 1000 characters")
-        private String description;
-
-        private String thumbnailUrl;
+        @NotBlank(message = "Course Status is required")
+        private String status;      // DRAFT / PUBLISHED / ARCHIVED
     }
 
-    // Course List / Course Detail response
-    @Getter
-    @Setter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    @Builder
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
     public static class CourseResponse {
         private Long id;
         private String name;
-        private String category;
-        private Long instructorId;
-        private String courseLevel;
         private String description;
+        private Integer categoryId;
+        private String categoryName;
+        private Long instructorId;
+        private String instructorName;
+        private String level;
+        private String status;
         private String thumbnailUrl;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
