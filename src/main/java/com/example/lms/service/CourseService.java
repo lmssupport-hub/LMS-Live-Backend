@@ -1,5 +1,7 @@
 package com.example.lms.service;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
 import com.example.lms.dto.CourseDto;
 import com.example.lms.entity.CourseEntity;
 import com.example.lms.exception.ApiException;
@@ -7,18 +9,15 @@ import com.example.lms.repository.CourseRepository;
 import com.example.lms.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.*;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 @Service
 public class CourseService {
@@ -39,13 +38,12 @@ public class CourseService {
 
     private final CourseRepository courseRepository;
     private final UserRepository userRepository;
+    private final Cloudinary cloudinary;
 
-    @Value("${app.upload.dir:uploads}")
-    private String uploadDir;
-
-    public CourseService(CourseRepository courseRepository, UserRepository userRepository) {
+    public CourseService(CourseRepository courseRepository, UserRepository userRepository, Cloudinary cloudinary) {
         this.courseRepository = courseRepository;
         this.userRepository = userRepository;
+        this.cloudinary = cloudinary;
     }
 
     @Transactional
@@ -175,6 +173,14 @@ public class CourseService {
         return instructorId;
     }
 
+    /**
+     * CHANGED: previously wrote the file to local disk (uploadDir/thumbnails), which
+     * only works if the container's filesystem is writable and persistent. On Render
+     * that path is neither: /app is read-only (AccessDeniedException), and even if it
+     * were writable, files vanish on every restart/redeploy (ephemeral disk). This now
+     * uploads to Cloudinary instead, which is a permanent, CDN-backed store outside the
+     * app's own container, and returns Cloudinary's public HTTPS URL to save in the DB.
+     */
     private String storeThumbnail(MultipartFile file) {
         if (file == null || file.isEmpty()) return null;
         if (!ALLOWED_THUMBNAIL_TYPES.contains(file.getContentType())) {
@@ -184,22 +190,22 @@ public class CourseService {
             throw new ApiException("File size exceeds 5 MB", HttpStatus.BAD_REQUEST);
         }
         try {
-            Path dir = Paths.get(uploadDir, "thumbnails");
-            Files.createDirectories(dir);
-            String ext = file.getOriginalFilename() != null && file.getOriginalFilename().contains(".")
-                    ? file.getOriginalFilename().substring(file.getOriginalFilename().lastIndexOf('.'))
-                    : "";
-            String filename = UUID.randomUUID() + ext;
-            Files.copy(file.getInputStream(), dir.resolve(filename), StandardCopyOption.REPLACE_EXISTING);
-            return "/uploads/thumbnails/" + filename;
+            Map<?, ?> uploadResult = cloudinary.uploader().upload(
+                    file.getBytes(),
+                    ObjectUtils.asMap(
+                            "folder", "lms/thumbnails",
+                            "resource_type", "image"
+                    )
+            );
+            Object secureUrl = uploadResult.get("secure_url");
+            if (secureUrl == null) {
+                log.error("Cloudinary upload returned no secure_url. Full response: {}", uploadResult);
+                throw new ApiException("Unable to store thumbnail. Please try again.", HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+            return secureUrl.toString();
         } catch (IOException e) {
-            // NEW: log the real underlying cause. Previously this exception was
-            // silently swallowed - ApiException's handler in GlobalExceptionHandler
-            // does not log, so nothing appeared in the console even though the
-            // request failed with 500. This line is what actually reveals *why*
-            // the write failed (permission denied, missing/read-only path, etc.).
-            log.error("Failed to store thumbnail. uploadDir='{}', originalFilename='{}'",
-                    uploadDir, file.getOriginalFilename(), e);
+            log.error("Failed to upload thumbnail to Cloudinary. originalFilename='{}'",
+                    file.getOriginalFilename(), e);
             throw new ApiException("Unable to store thumbnail. Please try again.", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
