@@ -5,6 +5,8 @@ import com.example.lms.entity.CourseEntity;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.CourseRepository;
 import com.example.lms.repository.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -20,6 +22,8 @@ import java.util.UUID;
 
 @Service
 public class CourseService {
+
+    private static final Logger log = LoggerFactory.getLogger(CourseService.class);
 
     private static final Map<Integer, String> CATEGORIES = Map.of(
             1, "Technical",
@@ -189,6 +193,13 @@ public class CourseService {
             Files.copy(file.getInputStream(), dir.resolve(filename), StandardCopyOption.REPLACE_EXISTING);
             return "/uploads/thumbnails/" + filename;
         } catch (IOException e) {
+            // NEW: log the real underlying cause. Previously this exception was
+            // silently swallowed - ApiException's handler in GlobalExceptionHandler
+            // does not log, so nothing appeared in the console even though the
+            // request failed with 500. This line is what actually reveals *why*
+            // the write failed (permission denied, missing/read-only path, etc.).
+            log.error("Failed to store thumbnail. uploadDir='{}', originalFilename='{}'",
+                    uploadDir, file.getOriginalFilename(), e);
             throw new ApiException("Unable to store thumbnail. Please try again.", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
