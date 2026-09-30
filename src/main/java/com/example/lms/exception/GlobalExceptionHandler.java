@@ -35,20 +35,19 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * NEW - Doc06 Field List #4: "File size exceeds 5 MB" is meant to be a clean, field-level
-     * validation message. But Tomcat/Spring's multipart parser enforces its OWN size ceiling
-     * (spring.servlet.multipart.max-file-size, 1MB by default) BEFORE the request even reaches
-     * CourseController/CourseService, so a file between 1MB and 5MB used to blow past that
-     * lower Tomcat limit, throw here, and fall through to handleUnexpected() below as a
-     * generic 500 "server error" - very confusing, since the UI's own validation says 5MB is
-     * fine. Handling it explicitly here keeps the message consistent with the one
-     * CourseService.storeThumbnail() throws for a real >5MB file, once max-file-size is also
-     * raised to 5MB in application.properties (see that config for the actual limit change).
+     * CHANGED (Multimedia SRS Field List #3): Tomcat/Spring's multipart parser enforces its OWN
+     * size ceiling (spring.servlet.multipart.max-file-size / max-request-size) BEFORE the request
+     * reaches any controller. That ceiling is now the multimedia limit (50 MB), so this handler only
+     * fires for files above it, and the wording must be the generic multimedia message instead of
+     * the old course-thumbnail "5 MB" text.
+     *
+     * Course thumbnails are unaffected: CourseService.storeThumbnail() still rejects anything over
+     * 5 MB with "File size exceeds 5 MB" before it ever reaches this handler.
      */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error("File size exceeds 5 MB"));
+                .body(ApiResponse.error("File size exceeds maximum limit."));
     }
 
     @ExceptionHandler(ApiException.class)

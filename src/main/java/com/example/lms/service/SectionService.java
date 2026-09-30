@@ -17,6 +17,10 @@ import java.util.stream.Collectors;
 @Service
 public class SectionService {
 
+    // Section Name rule: 3..100 CHARACTERS. Keep in sync with organize-sections.ts (MIN_CHARS / MAX_CHARS).
+    private static final int MIN_NAME_CHARS = 3;
+    private static final int MAX_NAME_CHARS = 100;
+
     private final SectionRepository sectionRepository;
     private final CourseRepository courseRepository;
 
@@ -139,12 +143,14 @@ public class SectionService {
         if (name.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Section Name is required.");
         }
-        int wordCount = name.split("\\s+").length;
-        if (wordCount < 3) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Section Name must be at least 3 words.");
+        // CHANGED: character-based minimum instead of word-based.
+        if (name.length() < MIN_NAME_CHARS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Section Name must be at least " + MIN_NAME_CHARS + " characters.");
         }
-        if (wordCount > 100) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Section Name must not exceed 100 words.");
+        if (name.length() > MAX_NAME_CHARS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Section Name must not exceed " + MAX_NAME_CHARS + " characters.");
         }
         return name;
     }
