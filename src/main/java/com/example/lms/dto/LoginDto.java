@@ -17,9 +17,15 @@ public class LoginDto {
     @Builder
     public static class LoginRequest {
 
-        @NotBlank(message = "Email ID is required")
-        @Email(message = "Enter a valid email address")
-        @Size(max = 254, message = "Enter a valid email address")
+        /**
+         * Input-handling rule (documented, applies to Login AND Sign Up):
+         * leading/trailing whitespace in the Email ID is TRIMMED before validation
+         * and authentication, so " user@example.com " logs in exactly like
+         * "user@example.com". A value that is only spaces becomes empty and fails
+         * with "Email ID is required".
+         *
+         * The password is NEVER trimmed - spaces can be a legitimate part of a password.
+         */
         private String email;
 
         @NotBlank(message = "Password is required")
@@ -29,6 +35,22 @@ public class LoginDto {
         // Optional field from the Field List - not mandatory.
         // When true, LoginService issues a longer-lived JWT (see JwtUtil).
         private Boolean rememberMe;
+
+        /**
+         * The validation annotations are on the GETTER on purpose: Hibernate Validator then
+         * validates the value returned here (already trimmed), independent of how the JSON
+         * mapper (Jackson 2 / 3) populated the field.
+         */
+        @NotBlank(message = "Email ID is required")
+        @Email(message = "Enter a valid email address")
+        @Size(max = 254, message = "Enter a valid email address")
+        public String getEmail() {
+            return email == null ? null : email.trim();
+        }
+
+        public void setEmail(String email) {
+            this.email = email;
+        }
     }
 
     @Data

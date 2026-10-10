@@ -19,9 +19,12 @@ public class SignUpDto {
         @NotBlank(message = "Last Name is required.")
         @Pattern(regexp = "^[A-Za-z]{1,50}$", message = "Last Name must contain only letters.")
         private String lastName;
-        @NotBlank(message = "Email ID is required.")
-        @Email(message = "Enter a valid email address.")
-        @Size(max = 100, message = "Enter a valid email address.")
+
+        /**
+         * Same documented rule as Login: leading/trailing spaces in the Email ID are
+         * trimmed before validation, so the stored email is always clean and a later
+         * login with or without stray spaces matches the same account.
+         */
         private String email;
         @NotBlank(message = "Country Code is required")
         private String countryCode;
@@ -40,6 +43,21 @@ public class SignUpDto {
         @NotNull(message = "Please accept the Terms & Conditions.")
         @AssertTrue(message = "Please accept the Terms & Conditions.")
         private Boolean acceptTerms;
+
+        /**
+         * Validation annotations live on the GETTER so they are checked against the
+         * trimmed value, independent of how the JSON mapper populated the field.
+         */
+        @NotBlank(message = "Email ID is required.")
+        @Email(message = "Enter a valid email address.")
+        @Size(max = 100, message = "Enter a valid email address.")
+        public String getEmail() {
+            return email == null ? null : email.trim();
+        }
+
+        public void setEmail(String email) {
+            this.email = email;
+        }
     }
 
     @Data
