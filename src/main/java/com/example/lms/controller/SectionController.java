@@ -1,5 +1,5 @@
 package com.example.lms.controller;
-
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import com.example.lms.dto.SectionDto;
 import com.example.lms.service.SectionService;
 import jakarta.validation.Valid;
@@ -11,6 +11,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/courses/{courseId}/sections")
+@SecurityRequirement(name = "bearerAuth")
 public class SectionController {
 
     private final SectionService sectionService;

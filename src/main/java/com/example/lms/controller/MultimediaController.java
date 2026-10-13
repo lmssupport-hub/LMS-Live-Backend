@@ -1,6 +1,8 @@
 package com.example.lms.controller;
 
 import com.example.lms.dto.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+
 import com.example.lms.dto.MultimediaDto;
 import com.example.lms.service.MultimediaService;
 import org.springframework.http.HttpStatus;
@@ -13,6 +15,8 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/courses/{courseId}/sections/{sectionId}/multimedia")
+@SecurityRequirement(name = "bearerAuth")
+
 public class MultimediaController {
 
     private final MultimediaService multimediaService;
