@@ -6,9 +6,12 @@ import com.example.lms.dto.CourseDto;
 import com.example.lms.entity.CourseEntity;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.CourseRepository;
+import com.example.lms.repository.EnrollmentRepository;
+import com.example.lms.repository.SectionRepository;
 import com.example.lms.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,11 +41,19 @@ public class CourseService {
 
     private final CourseRepository courseRepository;
     private final UserRepository userRepository;
+    private final SectionRepository sectionRepository;
+    private final EnrollmentRepository enrollmentRepository;
     private final Cloudinary cloudinary;
 
-    public CourseService(CourseRepository courseRepository, UserRepository userRepository, Cloudinary cloudinary) {
+    public CourseService(CourseRepository courseRepository,
+                         UserRepository userRepository,
+                         SectionRepository sectionRepository,
+                         EnrollmentRepository enrollmentRepository,
+                         Cloudinary cloudinary) {
         this.courseRepository = courseRepository;
         this.userRepository = userRepository;
+        this.sectionRepository = sectionRepository;
+        this.enrollmentRepository = enrollmentRepository;
         this.cloudinary = cloudinary;
     }
 
@@ -78,6 +89,26 @@ public class CourseService {
         return courseRepository.findAll().stream().map(this::toResponse).toList();
     }
 
+    /**
+     * NEW: a learner only sees the PUBLISHED courses they are enrolled in.
+     * {@code username} is the authenticated principal name (the user's email).
+     */
+    @Transactional(readOnly = true)
+    public List<CourseDto.CourseResponse> getCoursesForLearner(String username) {
+        Long userId = userRepository.findByEmailIgnoreCase(username)
+                .map(u -> u.getId())
+                .orElseThrow(() -> new ApiException("User not found.", HttpStatus.NOT_FOUND));
+
+        List<Long> courseIds = enrollmentRepository.findCourseIdsByUserId(userId);
+        if (courseIds.isEmpty()) {
+            return List.of();
+        }
+        return courseRepository.findAllById(courseIds).stream()
+                .filter(c -> "PUBLISHED".equalsIgnoreCase(c.getStatus()))
+                .map(this::toResponse)
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public CourseDto.CourseResponse getCourseById(Long courseId) {
         return toResponse(getCourseOrThrow(courseId));
@@ -110,9 +141,35 @@ public class CourseService {
         return toResponse(courseRepository.save(course));
     }
 
+    /**
+     * CHANGED: deleting a course now removes its dependent rows first (enrollments, then sections)
+     * and finally the course itself, all inside ONE transaction. Previously only the course row was
+     * deleted, so the foreign key from sections (fk_section_course) rejected it and the user saw
+     * "This request conflicts with an existing record."
+     *
+     * If anything fails, the whole transaction rolls back, so nothing is half-deleted.
+     */
     @Transactional
     public void deleteCourse(Long courseId) {
-        courseRepository.delete(getCourseOrThrow(courseId));
+        getCourseOrThrow(courseId); // 404 if the course does not exist
+
+        // children first, parent last
+        int removedEnrollments = enrollmentRepository.deleteByCourseId(courseId);
+        int removedSections = sectionRepository.deleteByCourseId(courseId);
+        courseRepository.deleteById(courseId);
+
+        try {
+            // flush here so any remaining FK problem surfaces with a clear message
+            courseRepository.flush();
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Course delete blocked by remaining references. courseId={}", courseId, e);
+            throw new ApiException(
+                    "This course cannot be deleted because other records still depend on it.",
+                    HttpStatus.CONFLICT);
+        }
+
+        log.info("Course deleted. courseId={}, enrollmentsRemoved={}, sectionsRemoved={}",
+                courseId, removedEnrollments, removedSections);
     }
 
     // ---------- helpers ----------
@@ -155,9 +212,8 @@ public class CourseService {
     }
 
     /**
-     * NEW - previously instructorId was taken from the request with no server-side check
-     * that the id actually belongs to an active INSTRUCTOR, so a stale/bad id from the
-     * client would silently save. Now it's validated the same way category/level/status are.
+     * instructorId is validated server-side: it must belong to an active INSTRUCTOR,
+     * the same way category/level/status are validated.
      */
     private Long validateInstructor(Long instructorId) {
         if (instructorId == null) {
@@ -174,12 +230,8 @@ public class CourseService {
     }
 
     /**
-     * CHANGED: previously wrote the file to local disk (uploadDir/thumbnails), which
-     * only works if the container's filesystem is writable and persistent. On Render
-     * that path is neither: /app is read-only (AccessDeniedException), and even if it
-     * were writable, files vanish on every restart/redeploy (ephemeral disk). This now
-     * uploads to Cloudinary instead, which is a permanent, CDN-backed store outside the
-     * app's own container, and returns Cloudinary's public HTTPS URL to save in the DB.
+     * Uploads to Cloudinary (permanent, CDN-backed store outside the app's own container)
+     * and returns the public HTTPS URL to save in the DB.
      */
     private String storeThumbnail(MultipartFile file) {
         if (file == null || file.isEmpty()) return null;

@@ -8,6 +8,8 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -25,6 +27,7 @@ public class CourseController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
     public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> createCourse(
             @RequestPart("course") @Valid CourseDto.CourseRequest request,
             @RequestPart(value = "thumbnail", required = false) MultipartFile thumbnail) {
@@ -33,9 +36,15 @@ public class CourseController {
                 .body(ApiResponse.success("Course created successfully.", created));
     }
 
+    // Admins/instructors get every course; a learner gets only the courses they are enrolled in.
     @GetMapping
-    public ResponseEntity<ApiResponse<List<CourseDto.CourseResponse>>> getAllCourses() {
-        return ResponseEntity.ok(ApiResponse.success("Courses fetched successfully.", courseService.getAllCourses()));
+    public ResponseEntity<ApiResponse<List<CourseDto.CourseResponse>>> getAllCourses(Authentication authentication) {
+        boolean learner = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_LEARNER".equals(a.getAuthority()));
+        List<CourseDto.CourseResponse> courses = learner
+                ? courseService.getCoursesForLearner(authentication.getName())
+                : courseService.getAllCourses();
+        return ResponseEntity.ok(ApiResponse.success("Courses fetched successfully.", courses));
     }
 
     @GetMapping("/{courseId}")
@@ -44,6 +53,7 @@ public class CourseController {
     }
 
     @PutMapping(value = "/{courseId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
     public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> updateCourse(
             @PathVariable Long courseId,
             @RequestPart("course") @Valid CourseDto.CourseRequest request,
@@ -53,6 +63,7 @@ public class CourseController {
     }
 
     @DeleteMapping("/{courseId}")
+    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
     public ResponseEntity<ApiResponse<Void>> deleteCourse(@PathVariable Long courseId) {
         courseService.deleteCourse(courseId);
         return ResponseEntity.ok(ApiResponse.success("Course deleted successfully."));

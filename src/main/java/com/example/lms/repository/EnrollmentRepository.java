@@ -108,4 +108,17 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, Lo
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("delete from EnrollmentEntity e where e.courseId = :courseId and e.userId in :userIds")
     int deleteByCourseIdAndUserIdIn(@Param("courseId") Long courseId, @Param("userIds") Collection<Long> userIds);
+
+    // ---------- Learner course list ----------
+
+    /** NEW: ids of every course the given learner is enrolled in. */
+    @Query("select e.courseId from EnrollmentEntity e where e.userId = :userId")
+    List<Long> findCourseIdsByUserId(@Param("userId") Long userId);
+
+    // ---------- Course delete ----------
+
+    /** NEW: removes every enrollment of a course in one statement (used when the course is deleted). */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("delete from EnrollmentEntity e where e.courseId = :courseId")
+    int deleteByCourseId(@Param("courseId") Long courseId);
 }

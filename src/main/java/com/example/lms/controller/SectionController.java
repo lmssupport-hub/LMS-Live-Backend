@@ -1,10 +1,12 @@
 package com.example.lms.controller;
+
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import com.example.lms.dto.SectionDto;
 import com.example.lms.service.SectionService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -21,6 +23,7 @@ public class SectionController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
     public ResponseEntity<SectionDto.ApiResponse<SectionDto.SectionResponse>> createSection(
             @PathVariable Long courseId,
             @Valid @RequestBody SectionDto.SectionRequest request) {
@@ -29,6 +32,7 @@ public class SectionController {
                 .body(SectionDto.ApiResponse.success("Section created successfully.", created));
     }
 
+    // Reads stay open to every authenticated user.
     @GetMapping
     public ResponseEntity<SectionDto.ApiResponse<List<SectionDto.SectionResponse>>> getAllSections(
             @PathVariable Long courseId) {
@@ -45,6 +49,7 @@ public class SectionController {
     }
 
     @PutMapping("/{sectionId}")
+    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
     public ResponseEntity<SectionDto.ApiResponse<SectionDto.SectionResponse>> updateSection(
             @PathVariable Long courseId,
             @PathVariable Long sectionId,
@@ -54,6 +59,7 @@ public class SectionController {
     }
 
     @DeleteMapping("/{sectionId}")
+    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
     public ResponseEntity<SectionDto.ApiResponse<Void>> deleteSection(
             @PathVariable Long courseId,
             @PathVariable Long sectionId) {
@@ -62,6 +68,7 @@ public class SectionController {
     }
 
     @PatchMapping("/reorder")
+    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
     public ResponseEntity<SectionDto.ApiResponse<List<SectionDto.SectionResponse>>> reorderSections(
             @PathVariable Long courseId,
             @Valid @RequestBody SectionDto.ReorderRequest request) {

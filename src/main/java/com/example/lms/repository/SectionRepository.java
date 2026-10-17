@@ -2,6 +2,7 @@ package com.example.lms.repository;
 
 import com.example.lms.entity.SectionEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -22,4 +23,9 @@ public interface SectionRepository extends JpaRepository<SectionEntity, Long> {
 
     @Query("SELECT COALESCE(MAX(s.sectionOrder), 0) FROM SectionEntity s WHERE s.course.id = :courseId")
     Integer findMaxOrderByCourseId(@Param("courseId") Long courseId);
+
+    /** NEW: removes every section of a course in one statement (used when the course is deleted). */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("delete from SectionEntity s where s.course.id = :courseId")
+    int deleteByCourseId(@Param("courseId") Long courseId);
 }
