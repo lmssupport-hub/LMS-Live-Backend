@@ -77,7 +77,8 @@ public class QuestionDto {
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
     public static class QuestionResponse {
         private Long id;
-        private Long sectionId;
+        private Long questionSectionId;   // CHANGED: was sectionId (organize section)
+        private Long questionBankId;
         private String text;
         private QuestionType type;
         private ScoringType scoringType;
@@ -111,10 +112,11 @@ public class QuestionDto {
         private Integer newOrder;
     }
 
+    /** Copy / Move target: another QUESTION SECTION of the same Question Bank. */
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor
     public static class TargetSectionRequest {
-        @NotNull(message = "targetSectionId is required.")
-        private Long targetSectionId;
+        @NotNull(message = "targetQuestionSectionId is required.")
+        private Long targetQuestionSectionId;
     }
 
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor
@@ -142,5 +144,47 @@ public class QuestionDto {
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
     public static class ImportResponse {
         private int imported;
+    }
+
+    // ---------- Question Bank (merged from QuestionBankDto) ----------
+
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class BankRequest {
+        @NotBlank(message = "Question Bank Name is required.")
+        @Size(min = 3, max = 100, message = "Question Bank Name must be between 3 and 100 characters.")
+        private String name;
+    }
+
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class BankResponse {
+        private Long id;
+        private Long courseId;
+        private Long sectionId;          // the organize section this bank was added to
+        private String name;
+        private int bankOrder;
+        private long questionSectionCount;
+        private long totalQuestionCount; // across all question sections of this bank
+        private LocalDateTime createdAt;
+        private LocalDateTime updatedAt;
+    }
+
+    // ---------- Question Section (merged from QuestionSectionDto) ----------
+
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class QuestionSectionRequest {
+        @NotBlank(message = "Section Name is required.")
+        @Size(min = 3, max = 100, message = "Section Name must be between 3 and 100 characters.")
+        private String name;
+    }
+
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class QuestionSectionResponse {
+        private Long id;
+        private Long questionBankId;
+        private String name;
+        private int sectionOrder;
+        private long questionCount;
+        private LocalDateTime createdAt;
+        private LocalDateTime updatedAt;
     }
 }
