@@ -77,7 +77,7 @@ public class QuestionDto {
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
     public static class QuestionResponse {
         private Long id;
-        private Long questionSectionId;   // CHANGED: was sectionId (organize section)
+        private Long questionSectionId;
         private Long questionBankId;
         private String text;
         private QuestionType type;
@@ -106,6 +106,24 @@ public class QuestionDto {
     public static class ReorderItem {
         @NotNull(message = "questionId is required.")
         private Long questionId;
+
+        @NotNull(message = "newOrder is required.")
+        @Min(value = 1, message = "newOrder must be 1 or greater.")
+        private Integer newOrder;
+    }
+
+    /** NEW: body of PATCH .../question-sections/reorder (same shape as the question reorder). */
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor
+    public static class SectionReorderRequest {
+        @NotEmpty(message = "Reorder items list cannot be empty.")
+        @Valid
+        private List<SectionReorderItem> items;
+    }
+
+    @Getter @Setter @NoArgsConstructor @AllArgsConstructor
+    public static class SectionReorderItem {
+        @NotNull(message = "questionSectionId is required.")
+        private Long questionSectionId;
 
         @NotNull(message = "newOrder is required.")
         @Min(value = 1, message = "newOrder must be 1 or greater.")
@@ -146,7 +164,7 @@ public class QuestionDto {
         private int imported;
     }
 
-    // ---------- Question Bank (merged from QuestionBankDto) ----------
+    // ---------- Question Bank ----------
 
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
     public static class BankRequest {
@@ -168,13 +186,21 @@ public class QuestionDto {
         private LocalDateTime updatedAt;
     }
 
-    // ---------- Question Section (merged from QuestionSectionDto) ----------
+    // ---------- Question Section ----------
 
+    /** name + "Section points" panel (score, feedback). score / feedback are optional (null clears them). */
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
     public static class QuestionSectionRequest {
         @NotBlank(message = "Section Name is required.")
         @Size(min = 3, max = 100, message = "Section Name must be between 3 and 100 characters.")
         private String name;
+
+        @Min(value = 0, message = "Score must be between 0 and 100.")
+        @Max(value = 100, message = "Score must be between 0 and 100.")
+        private Integer score;
+
+        @Size(max = 500, message = "Feedback must not exceed 500 characters.")
+        private String feedback;
     }
 
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
@@ -183,6 +209,8 @@ public class QuestionDto {
         private Long questionBankId;
         private String name;
         private int sectionOrder;
+        private Integer score;           // null = not set
+        private String feedback;         // null = not set
         private long questionCount;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;

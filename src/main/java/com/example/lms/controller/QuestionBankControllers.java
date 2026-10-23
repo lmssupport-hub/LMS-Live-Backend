@@ -2,15 +2,7 @@ package com.example.lms.controller;
 
 import com.example.lms.dto.ApiResponse;
 import com.example.lms.dto.QuestionDto;
-import com.example.lms.entity.QuestionBankEntities.QuestionBankEntity;
-import com.example.lms.entity.QuestionBankEntities.QuestionEntity;
-import com.example.lms.entity.QuestionBankEntities.QuestionOptionEntity;
-import com.example.lms.entity.QuestionBankEntities.QuestionSectionEntity;
-import com.example.lms.repository.QuestionBankRepository;
-import com.example.lms.repository.QuestionRepository;
-import com.example.lms.repository.QuestionSectionRepository;
 import com.example.lms.service.QuestionBankServices.QuestionBankService;
-import com.example.lms.service.QuestionBankServices.QuestionMapper;
 import com.example.lms.service.QuestionBankServices.QuestionSectionService;
 import com.example.lms.service.QuestionBankServices.QuestionService;
 import com.example.lms.service.QuestionBankServices.QuestionTransferService;
@@ -18,6 +10,8 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -111,6 +105,15 @@ public class QuestionBankControllers {
                     "Sections fetched successfully.", service.getAll(courseId, sectionId, bankId)));
         }
 
+        /** NEW: drag & drop / move up / move down of question sections. Body: { items: [{questionSectionId, newOrder}] }. */
+        @PatchMapping("/reorder")
+        public ResponseEntity<ApiResponse<List<QuestionDto.QuestionSectionResponse>>> reorder(
+                @PathVariable Long courseId, @PathVariable Long sectionId, @PathVariable Long bankId,
+                @Valid @RequestBody QuestionDto.SectionReorderRequest request) {
+            return ResponseEntity.ok(ApiResponse.success(
+                    "Sections reordered successfully.", service.reorder(courseId, sectionId, bankId, request)));
+        }
+
         @GetMapping("/{questionSectionId}")
         public ResponseEntity<ApiResponse<QuestionDto.QuestionSectionResponse>> get(
                 @PathVariable Long courseId, @PathVariable Long sectionId, @PathVariable Long bankId,
@@ -158,14 +161,31 @@ public class QuestionBankControllers {
 
         // ---------- CRUD ----------
 
+        /**
+         * NEW: honours the optional "Idempotency-Key" header. The Angular app sends question.clientId, which is
+         * stable across retries, so a request that timed out / was re-sent after a network drop never creates a
+         * second copy of the same question - the already-created question is returned instead.
+         */
         @PostMapping
         public ResponseEntity<ApiResponse<QuestionDto.QuestionResponse>> createQuestion(
                 @PathVariable Long courseId, @PathVariable Long sectionId, @PathVariable Long bankId,
                 @PathVariable Long questionSectionId,
+                @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
                 @Valid @RequestBody QuestionDto.QuestionRequest request) {
+            QuestionDto.QuestionResponse body;
+            try {
+                body = questionService.createQuestion(
+                        courseId, sectionId, bankId, questionSectionId, request, idempotencyKey);
+            } catch (DataIntegrityViolationException race) {
+                // Two identical requests ran at the same time and the unique index stopped the second one.
+                // The first one has committed by now, so return ITS question instead of an error.
+                Optional<QuestionDto.QuestionResponse> existing = questionService.findByIdempotencyKey(
+                        courseId, sectionId, bankId, questionSectionId, idempotencyKey);
+                if (existing.isEmpty()) throw race;
+                body = existing.get();
+            }
             return ResponseEntity.status(HttpStatus.CREATED)
-                    .body(ApiResponse.success("Question created successfully.",
-                            questionService.createQuestion(courseId, sectionId, bankId, questionSectionId, request)));
+                    .body(ApiResponse.success("Question created successfully.", body));
         }
 
         @GetMapping

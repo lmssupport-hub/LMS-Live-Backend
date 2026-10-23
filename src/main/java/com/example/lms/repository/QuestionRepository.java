@@ -20,6 +20,10 @@ public interface QuestionRepository extends JpaRepository<QuestionEntity, Long> 
     @EntityGraph(attributePaths = "options")
     Optional<QuestionEntity> findByIdAndQuestionSectionId(Long id, Long questionSectionId);
 
+    /** NEW: replay lookup for the Idempotency-Key header (scoped to one question section). */
+    @EntityGraph(attributePaths = "options")
+    Optional<QuestionEntity> findByQuestionSectionIdAndIdempotencyKey(Long questionSectionId, String idempotencyKey);
+
     /** Bank-scoped lookup so a caller can never pull questions from another Question Bank. */
     @EntityGraph(attributePaths = "options")
     @Query("SELECT q FROM QuestionEntity q WHERE q.id IN :ids AND q.questionSection.questionBank.id = :bankId")

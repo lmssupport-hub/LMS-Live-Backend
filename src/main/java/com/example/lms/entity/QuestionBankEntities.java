@@ -70,6 +70,8 @@ public class QuestionBankEntities {
     /**
      * "Question Section" INSIDE a Question Bank (e.g. Section 1 = 10 questions, Section 2 = 5 questions).
      * This is NOT the course "organize section" (SectionEntity).
+     *
+     * NEW: score + feedback = the "Section points" panel of the design.
      */
     @Entity(name = "QuestionSectionEntity")
     @Table(
@@ -99,6 +101,14 @@ public class QuestionBankEntities {
         @Column(name = "section_order", nullable = false)
         private int sectionOrder;
 
+        /** NEW: Section points -> Score (0..100). null = not set. */
+        @Column(name = "score")
+        private Integer score;
+
+        /** NEW: Section points -> Feedback (max 500 chars). null = not set. */
+        @Column(name = "feedback", length = 500)
+        private String feedback;
+
         @Column(name = "created_at", updatable = false)
         private LocalDateTime createdAt;
 
@@ -120,6 +130,11 @@ public class QuestionBankEntities {
     @Entity(name = "QuestionEntity")
     @Table(
         name = "questions",
+        uniqueConstraints = {
+            // NEW: one Idempotency-Key can create at most one question per question section.
+            // NULL keys (import, copy, duplicate ...) never collide with each other.
+            @UniqueConstraint(name = "uq_question_idempotency", columnNames = {"question_section_id", "idempotency_key"})
+        },
         indexes = {
             @Index(name = "idx_question_qsection_order", columnList = "question_section_id, question_order")
         }
@@ -131,7 +146,7 @@ public class QuestionBankEntities {
         @GeneratedValue(strategy = GenerationType.IDENTITY)
         private Long id;
 
-        // CHANGED: a question now belongs to a QUESTION SECTION (inside a Question Bank),
+        // A question belongs to a QUESTION SECTION (inside a Question Bank),
         // not directly to the course "organize section".
         // ON DELETE CASCADE at DB level: deleting a question section removes its questions.
         @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -171,6 +186,14 @@ public class QuestionBankEntities {
 
         @Column(name = "question_order", nullable = false)
         private int questionOrder;
+
+        /**
+         * NEW: value of the "Idempotency-Key" header of the POST that created this question
+         * (the Angular app sends question.clientId). A retried POST returns this question
+         * instead of creating a second one. Never changes after creation.
+         */
+        @Column(name = "idempotency_key", length = 64, updatable = false)
+        private String idempotencyKey;
 
         /** Optimistic locking: concurrent edits of the same question (SRS edge case). */
         @Version

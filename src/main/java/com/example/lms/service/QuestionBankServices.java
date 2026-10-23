@@ -159,12 +159,17 @@ public class QuestionBankServices {
     /**
      * Question Sections inside ONE Question Bank, e.g.
      *   Java Question Bank -> Section 1 (10 questions), Section 2 (5 questions).
+     *
+     * Each section also carries the "Section points" panel: score (0..100) + feedback (max 500 chars).
      */
     @Service
     @Transactional(readOnly = true)
     public static class QuestionSectionService {
 
         private static final int MAX_SECTIONS_PER_BANK = 100;
+        private static final int MIN_SCORE = 0;
+        private static final int MAX_SCORE = 100;
+        private static final int MAX_FEEDBACK_CHARS = 500;
 
         private final QuestionSectionRepository questionSectionRepository;
         private final QuestionRepository questionRepository;
@@ -183,6 +188,7 @@ public class QuestionBankServices {
                                                                  QuestionDto.QuestionSectionRequest request) {
             QuestionBankEntity bank = bankService.getBankOrThrow(courseId, sectionId, bankId);
             String name = validateName(request.getName());
+            validatePoints(request.getScore(), request.getFeedback());
 
             if (questionSectionRepository.countByQuestionBankId(bankId) >= MAX_SECTIONS_PER_BANK) {
                 throw new ApiException("A question bank can contain at most " + MAX_SECTIONS_PER_BANK + " sections.",
@@ -196,6 +202,8 @@ public class QuestionBankServices {
             QuestionSectionEntity s = new QuestionSectionEntity();
             s.setQuestionBank(bank);
             s.setName(name);
+            s.setScore(request.getScore());
+            s.setFeedback(blankToNull(request.getFeedback()));
             s.setSectionOrder((max == null ? 0 : max) + 1);
             return toResponse(questionSectionRepository.save(s));
         }
@@ -213,15 +221,19 @@ public class QuestionBankServices {
             return toResponse(getEntityOrThrow(courseId, sectionId, bankId, questionSectionId));
         }
 
+        /** PUT = full replace of name + section points (a null score / blank feedback clears the value). */
         @Transactional
         public QuestionDto.QuestionSectionResponse update(Long courseId, Long sectionId, Long bankId, Long questionSectionId,
                                                                  QuestionDto.QuestionSectionRequest request) {
             QuestionSectionEntity s = getEntityOrThrow(courseId, sectionId, bankId, questionSectionId);
             String name = validateName(request.getName());
+            validatePoints(request.getScore(), request.getFeedback());
             if (questionSectionRepository.existsByQuestionBankIdAndNameIgnoreCaseAndIdNot(bankId, name, questionSectionId)) {
                 throw new ApiException("A section with the same name already exists in this question bank.", HttpStatus.CONFLICT);
             }
             s.setName(name);
+            s.setScore(request.getScore());
+            s.setFeedback(blankToNull(request.getFeedback()));
             return toResponse(questionSectionRepository.save(s));
         }
 
@@ -237,6 +249,50 @@ public class QuestionBankServices {
                 if (r.getSectionOrder() != order) r.setSectionOrder(order);
                 order++;
             }
+        }
+
+        /**
+         * NEW: rearranges the question sections of a bank (drag & drop, move up, move down).
+         * The request must list EVERY section of the bank exactly once, with orders 1..n and no gaps.
+         */
+        @Transactional
+        public List<QuestionDto.QuestionSectionResponse> reorder(Long courseId, Long sectionId, Long bankId,
+                                                                 QuestionDto.SectionReorderRequest request) {
+            bankService.getBankOrThrow(courseId, sectionId, bankId);
+            List<QuestionSectionEntity> all = new ArrayList<>(
+                    questionSectionRepository.findByQuestionBankIdOrderBySectionOrderAscIdAsc(bankId));
+            if (all.size() < 2) {
+                throw new ApiException("Reordering requires at least two sections in the question bank.",
+                        HttpStatus.UNPROCESSABLE_ENTITY);
+            }
+
+            List<QuestionDto.SectionReorderItem> items = request.getItems();
+            if (items.size() != all.size()) {
+                throw new ApiException("Reorder request must include every section of the question bank exactly once.",
+                        HttpStatus.BAD_REQUEST);
+            }
+
+            Map<Long, QuestionSectionEntity> byId = all.stream()
+                    .collect(Collectors.toMap(QuestionSectionEntity::getId, s -> s));
+            Set<Long> seenIds = new HashSet<>();
+            Set<Integer> seenOrders = new HashSet<>();
+            for (QuestionDto.SectionReorderItem item : items) {
+                if (item == null || item.getQuestionSectionId() == null || item.getNewOrder() == null) {
+                    throw new ApiException("Reorder items must contain questionSectionId and newOrder.", HttpStatus.BAD_REQUEST);
+                }
+                if (!byId.containsKey(item.getQuestionSectionId())) {
+                    throw new ApiException("Question section not found with id: " + item.getQuestionSectionId()
+                            + " in question bank: " + bankId, HttpStatus.NOT_FOUND);
+                }
+                if (!seenIds.add(item.getQuestionSectionId()) || !seenOrders.add(item.getNewOrder())
+                        || item.getNewOrder() > all.size()) {
+                    throw new ApiException("Reorder request contains duplicate or out-of-range values.", HttpStatus.BAD_REQUEST);
+                }
+            }
+            items.forEach(i -> byId.get(i.getQuestionSectionId()).setSectionOrder(i.getNewOrder()));
+
+            all.sort(Comparator.comparingInt(QuestionSectionEntity::getSectionOrder));
+            return all.stream().map(this::toResponse).toList();
         }
 
         // ---------- shared helper (also used by QuestionService) ----------
@@ -259,12 +315,28 @@ public class QuestionBankServices {
             return name;
         }
 
+        /** "Section points" panel: Score 0..100 (optional), Feedback max 500 characters (optional). */
+        private void validatePoints(Integer score, String feedback) {
+            if (score != null && (score < MIN_SCORE || score > MAX_SCORE)) {
+                throw new ApiException("Score must be between 0 and 100.", HttpStatus.BAD_REQUEST);
+            }
+            if (feedback != null && feedback.trim().length() > MAX_FEEDBACK_CHARS) {
+                throw new ApiException("Feedback must not exceed 500 characters.", HttpStatus.BAD_REQUEST);
+            }
+        }
+
+        private String blankToNull(String v) {
+            return v == null || v.isBlank() ? null : v.trim();
+        }
+
         private QuestionDto.QuestionSectionResponse toResponse(QuestionSectionEntity s) {
             return QuestionDto.QuestionSectionResponse.builder()
                     .id(s.getId())
                     .questionBankId(s.getQuestionBank().getId())
                     .name(s.getName())
                     .sectionOrder(s.getSectionOrder())
+                    .score(s.getScore())
+                    .feedback(s.getFeedback())
                     .questionCount(questionRepository.countByQuestionSectionId(s.getId()))
                     .createdAt(s.getCreatedAt())
                     .updatedAt(s.getUpdatedAt())
@@ -284,6 +356,8 @@ public class QuestionBankServices {
         private static final int MAX_QUESTIONS_PER_SECTION = 500;
         private static final int MAX_PAGE_SIZE = 50;
         private static final int MAX_KEYWORD_CHARS = 100;
+        /** Idempotency-Key: the Angular clientId (UUID) or "<timestamp>-<random>" fallback. */
+        private static final Pattern IDEMPOTENCY_KEY = Pattern.compile("^[A-Za-z0-9_.:-]{1,64}$");
 
         private final QuestionRepository questionRepository;
         private final QuestionSectionService questionSectionService;
@@ -302,10 +376,47 @@ public class QuestionBankServices {
 
         // ---------- create / read ----------
 
+        /** Create without an Idempotency-Key. */
         @Transactional
         public QuestionDto.QuestionResponse createQuestion(Long courseId, Long sectionId, Long bankId, Long qsId,
                                                            QuestionDto.QuestionRequest request) {
-            return createQuestions(courseId, sectionId, bankId, qsId, List.of(request)).get(0);
+            return createQuestion(courseId, sectionId, bankId, qsId, request, null);
+        }
+
+        /**
+         * NEW: create with an optional Idempotency-Key. When a question with the same key already exists in this
+         * question section, that question is returned and NOTHING is created (safe retry after a timeout).
+         */
+        @Transactional
+        public QuestionDto.QuestionResponse createQuestion(Long courseId, Long sectionId, Long bankId, Long qsId,
+                                                           QuestionDto.QuestionRequest request, String idempotencyKey) {
+            QuestionSectionEntity qs = scope(courseId, sectionId, bankId, qsId);
+            String key = normalizeKey(idempotencyKey);
+
+            if (key != null) {
+                Optional<QuestionEntity> replay = questionRepository.findByQuestionSectionIdAndIdempotencyKey(qsId, key);
+                if (replay.isPresent()) return mapper.toResponse(replay.get());
+            }
+
+            validator.validate(request);
+            ensureCapacity(qsId, 1);
+
+            QuestionEntity q = new QuestionEntity();
+            q.setQuestionSection(qs);
+            mapper.apply(q, request);
+            q.setQuestionOrder(nextOrder(qsId));
+            q.setIdempotencyKey(key);
+            // flush now so a concurrent duplicate hits the unique index inside this call (the controller then replays it)
+            return mapper.toResponse(questionRepository.saveAndFlush(q));
+        }
+
+        /** NEW: replay lookup used by the controller after a concurrent duplicate lost the race. */
+        public Optional<QuestionDto.QuestionResponse> findByIdempotencyKey(Long courseId, Long sectionId, Long bankId,
+                                                                           Long qsId, String idempotencyKey) {
+            String key = normalizeKey(idempotencyKey);
+            if (key == null) return Optional.empty();
+            scope(courseId, sectionId, bankId, qsId);
+            return questionRepository.findByQuestionSectionIdAndIdempotencyKey(qsId, key).map(mapper::toResponse);
         }
 
         /** Batch create (also used by CSV import). All-or-nothing. */
@@ -552,6 +663,17 @@ public class QuestionBankServices {
             }
         }
 
+        /** Blank header = no key (null). A malformed key is a 400, never silently ignored. */
+        private String normalizeKey(String raw) {
+            if (raw == null || raw.isBlank()) return null;
+            String key = raw.trim();
+            if (!IDEMPOTENCY_KEY.matcher(key).matches()) {
+                throw new ApiException("Idempotency-Key must be 1-64 characters (letters, numbers, - _ . :).",
+                        HttpStatus.BAD_REQUEST);
+            }
+            return key;
+        }
+
         /** Lower-cases and strips LIKE wildcards so user input can't change the query's meaning. */
         private String sanitizeKeyword(String keyword) {
             if (keyword == null) return "";
@@ -628,7 +750,7 @@ public class QuestionBankServices {
             q.replaceOptions(options);
         }
 
-        /** Deep copy (new identity, version reset) used by duplicate / copy / add-existing. */
+        /** Deep copy (new identity, version reset, NO idempotency key) used by duplicate / copy / add-existing. */
         public QuestionEntity copyOf(QuestionEntity src, QuestionSectionEntity target, int order) {
             QuestionEntity c = new QuestionEntity();
             c.setQuestionSection(target);
@@ -826,7 +948,7 @@ public class QuestionBankServices {
         public byte[] exportQuestions(Long courseId, Long sectionId, Long bankId, Long questionSectionId) {
             List<QuestionDto.QuestionResponse> questions = questionService.getQuestions(courseId, sectionId, bankId, questionSectionId);
 
-            StringBuilder sb = new StringBuilder("\uFEFF"); // BOM so Excel opens UTF-8 correctly
+            StringBuilder sb = new StringBuilder("﻿"); // BOM so Excel opens UTF-8 correctly
             sb.append(com.example.lms.util.CsvUtil.toLine(HEADER));
             for (QuestionDto.QuestionResponse q : questions) {
                 List<String> options = new ArrayList<>();
