@@ -2,6 +2,7 @@ package com.example.lms.dto;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -12,6 +13,7 @@ import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import jakarta.validation.constraints.PositiveOrZero;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -22,10 +24,10 @@ public class PackageDto {
     @NoArgsConstructor
     public static class Request {
 
-        // S#10 - Available Package (Basic / Standard / Premium / Existing)
+        // S#10 - Available Package (Trial / Basic / Standard / Premium / Existing)
         @NotBlank(message = "Please select a package")
         @Pattern(
-                regexp = "Basic|Standard|Premium|Existing",
+                regexp = "Trial|Basic|Standard|Premium|Existing",
                 message = "Please select a package"
         )
         private String availablePackage;
@@ -36,22 +38,28 @@ public class PackageDto {
         private String name;
 
         // S#12 - Package Description (optional, max 500 words)
-        // Word-count (not char-count) is checked via the custom validator below,
-        // since Bean Validation has no built-in "max words" constraint.
         private String description;
 
-        // S#13 - Price (mandatory, must be > 0)
+        // S#13 - Price (mandatory). Trial: 0. Every other package: must be > 0 (see rule below).
         @NotNull(message = "Price is required")
-        @Positive(message = "Price must be greater than zero")
+        @PositiveOrZero(message = "Price must not be negative")
         private Double price;
 
-        // S#14 - Billing Cycle (mandatory, Monthly / Yearly only)
+        // S#14 - Billing Cycle (Monthly / Yearly, or Custom for Trial only)
         @NotBlank(message = "Please select a billing cycle")
         @Pattern(
-                regexp = "Monthly|Yearly",
+                regexp = "Monthly|Yearly|Custom",
                 message = "Please select a billing cycle"
         )
         private String billingCycle;
+
+        // Validity in days.
+        //  - Trial   : entered by the user (1-365)
+        //  - Monthly : overwritten by the service to 30
+        //  - Yearly  : overwritten by the service to 365
+        @Min(value = 1, message = "Days must be at least 1")
+        @Max(value = 365, message = "Days must not exceed 365")
+        private Integer durationDays;
 
         // S#15 - User Limit (mandatory, >= 1)
         @NotNull(message = "User Limit is required")
@@ -62,28 +70,16 @@ public class PackageDto {
         @Min(value = 0, message = "Storage Limit must be zero or greater")
         private Integer storageLimit;
 
-        // Admin Permission page - at least one Create/Read/Update/Delete
-        // toggle must be enabled somewhere before Save Package is allowed.
-        // @NotEmpty (not just @NotNull) so an explicitly-empty array is
-        // rejected with a field-level error instead of falling through to
-        // the cross-field @AssertTrue below with a less specific message.
         @NotEmpty(message = "Please configure the required permissions before saving")
         @Valid
         private List<Category> permissions;
 
         /**
-         * Doc07 Edge Case #6 concurrency guard at the application level (in
-         * addition to the DB-level @Version check on the entity). Client
-         * echoes back the version it last read via GET; on update this is
-         * compared against the current DB row before any write is attempted,
-         * so we can return the exact SRS wording ("the package has already
-         * been modified") rather than a generic JPA optimistic-lock error.
+         * Doc07 Edge Case #6 concurrency guard at the application level.
          * Null/ignored on create.
          */
         private Long version;
 
-        // Custom cross-field rule: SRS Field #12 caps description at 500 words.
-        // Runs only when a description was actually entered (field is optional).
         @AssertTrue(message = "Package Description must not exceed 500 words")
         public boolean isDescriptionWithinWordLimit() {
             if (description == null || description.trim().isEmpty()) {
@@ -92,8 +88,38 @@ public class PackageDto {
             return description.trim().split("\\s+").length <= 500;
         }
 
-        // Custom cross-field rule: SRS Field #6 (Admin Permission) - "at least
-        // one permission should be configured" before Save Package is enabled.
+        /**
+         * Trial must use the "Custom" billing cycle; every other package must
+         * use Monthly or Yearly.
+         */
+        @AssertTrue(message = "Billing cycle is not valid for the selected package")
+        public boolean isBillingCycleValidForPackage() {
+            if (availablePackage == null || billingCycle == null) {
+                return true; // field-level @NotBlank reports these
+            }
+            if ("Trial".equals(availablePackage)) {
+                return "Custom".equals(billingCycle);
+            }
+            return "Monthly".equals(billingCycle) || "Yearly".equals(billingCycle);
+        }
+
+        /** Days are mandatory only for Trial. */
+        @AssertTrue(message = "Please enter the number of trial days")
+        public boolean isTrialDaysProvided() {
+            if (!"Trial".equals(availablePackage)) {
+                return true;
+            }
+            return durationDays != null && durationDays >= 1;
+        }
+        
+        /** Only Trial may be free; all other packages must have a price above zero. */
+        @AssertTrue(message = "Price must be greater than zero")
+        public boolean isPriceValidForPackage() {
+            if (availablePackage == null || price == null) return true; // field-level checks report these
+            if ("Trial".equals(availablePackage)) return true;
+            return price > 0;
+        }
+
         @AssertTrue(message = "Please configure the required permissions before saving")
         public boolean isAtLeastOnePermissionEnabled() {
             if (permissions == null || permissions.isEmpty()) {
@@ -119,6 +145,7 @@ public class PackageDto {
         private String description;
         private Double price;
         private String billingCycle;
+        private Integer durationDays;
         private Integer userLimit;
         private Integer storageLimit;
         private String status;
@@ -127,7 +154,6 @@ public class PackageDto {
         private Long version;
     }
 
-    // Matches screenshot: Authentication, Course Management, Content Management, Enrollment...
     @Data
     @NoArgsConstructor
     public static class Category {
@@ -142,7 +168,6 @@ public class PackageDto {
         private List<Feature> features;
     }
 
-    // Matches screenshot: Create Course, Course List, Organize Modules, Multimedia, Ebook...
     @Data
     @NoArgsConstructor
     public static class Feature {
@@ -164,12 +189,6 @@ public class PackageDto {
         private boolean delete;
     }
 
-    /**
-     * Response shape for GET /api/packages/features - the predefined feature
-     * catalog the Admin Permission matrix (Doc07 Field #1) is built from.
-     * Reuses Category/Feature so the frontend can seed the same matrix
-     * structure it POSTs back in Request.permissions.
-     */
     @Data
     @NoArgsConstructor
     @AllArgsConstructor

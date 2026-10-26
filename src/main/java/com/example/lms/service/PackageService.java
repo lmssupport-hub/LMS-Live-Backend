@@ -39,6 +39,10 @@ public class PackageService {
 
     private static final Logger log = LoggerFactory.getLogger(PackageService.class);
 
+    /** Monthly = 30 days, Yearly = 365 days. Trial (Custom) uses the days the user entered. */
+    private static final int MONTHLY_DAYS = 30;
+    private static final int YEARLY_DAYS = 365;
+
     private final PackageRepository packageRepository;
     private final SystemFeatureRepository systemFeatureRepository;
     private final UserRepository userRepository;
@@ -49,15 +53,8 @@ public class PackageService {
 
     /**
      * Features that represent a single yes/no capability rather than a
-     * CRUD-shaped permission (e.g. "does this package grant login access at
-     * all", not "can it create/read/update/delete access records"). Mirrors
-     * the frontend's SINGLE_TOGGLE_FEATURE_IDS in package.service.ts.
-     *
-     * The client is expected to keep all four Create/Read/Update/Delete
-     * flags in lock-step for these features, but the server never trusts
-     * that alone (OWASP: never rely on client-side enforcement of a
-     * business rule) — validatePermissionFeaturesExist() below rejects any
-     * request where they've drifted out of sync.
+     * CRUD-shaped permission. Mirrors the frontend's SINGLE_TOGGLE_FEATURE_IDS.
+     * The server never trusts the client alone for this rule.
      */
     private static final Set<String> SINGLE_TOGGLE_FEATURE_IDS = Set.of("AUTH_USER_ACCESS");
 
@@ -105,18 +102,6 @@ public class PackageService {
         }
     }
 
-    /**
-     * FIX (defense-in-depth): marked read-only. This alone would NOT have
-     * fixed the "Large Objects may not be used in auto-commit mode" 500 —
-     * that was caused by PackageEntity.permissionsJson being mapped as
-     * @Lob, which forces Hibernate to stream it as a Postgres CLOB via the
-     * Large Object API regardless of the surrounding transaction's
-     * autocommit setting for reads that don't otherwise need one. The real
-     * fix is in PackageEntity (swap @Lob for
-     * @JdbcTypeCode(SqlTypes.LONGVARCHAR)). This annotation is added
-     * anyway as good practice for read paths and to guard against similar
-     * lazy-load-outside-a-transaction issues in the future.
-     */
     @Transactional(readOnly = true)
     public PackageDto.Response getPackageById(Long id) {
         PackageEntity entity = packageRepository.findById(id)
@@ -147,7 +132,7 @@ public class PackageService {
 
     @Transactional(readOnly = true)
     public List<PackageDto.FeatureCatalogEntry> getFeatureCatalog() {
-        List<SystemFeatureEntity> features = systemFeatureRepository.findByActiveTrueOrderByCategoryIdAsc();
+        List<SystemFeatureEntity> features = systemFeatureRepository.findByActiveTrueOrderByDisplayOrderAscIdAsc();
 
         Map<String, List<SystemFeatureEntity>> byCategory = features.stream()
                 .collect(Collectors.groupingBy(
@@ -183,10 +168,8 @@ public class PackageService {
 
     /**
      * Doc06 S#19-22 — assigns an existing package to an already-registered
-     * Admin, identified by email. Sets User.packageId (which
-     * SignUpService.listAdmins()/toAdminSummary() already reads), plus
-     * assigned/expiry timestamps computed from the package's billing cycle
-     * so isPackageExpired() on the entity works immediately.
+     * Admin, identified by email. Expiry is now computed from the package's
+     * durationDays (Monthly 30, Yearly 365, Trial = custom days).
      */
     @Transactional
     public void assignPackageToUser(PackageAssignmentDto request) {
@@ -203,24 +186,42 @@ public class PackageService {
         LocalDateTime now = LocalDateTime.now();
         user.setPackageId(packageEntity.getId());
         user.setPackageAssignedAt(now);
-        user.setPackageExpiresAt(computeExpiry(now, packageEntity.getBillingCycle()));
+        user.setPackageExpiresAt(now.plusDays(effectiveDays(packageEntity)));
 
         userRepository.save(user);
     }
 
-    private LocalDateTime computeExpiry(LocalDateTime from, String billingCycle) {
-        return "Yearly".equalsIgnoreCase(billingCycle) ? from.plusYears(1) : from.plusMonths(1);
+    /**
+     * Days a package is valid for. Uses the stored durationDays; falls back to
+     * 30 / 365 from the billing cycle for old rows saved before the column existed.
+     */
+    private int effectiveDays(PackageEntity entity) {
+        if (entity.getDurationDays() != null && entity.getDurationDays() > 0) {
+            return entity.getDurationDays();
+        }
+        return "Yearly".equalsIgnoreCase(entity.getBillingCycle()) ? YEARLY_DAYS : MONTHLY_DAYS;
     }
 
     /**
-     * Validates that every submitted feature id is a real, active system
-     * feature, and that single-toggle features (see
-     * SINGLE_TOGGLE_FEATURE_IDS) weren't submitted in an inconsistent
-     * half-on state. The frontend is expected to keep these features'
-     * Create/Read/Update/Delete flags identical, but per OWASP guidance we
-     * never rely on client-side enforcement alone for a business rule that
-     * affects access control.
+     * Monthly -> 30, Yearly -> 365 (always overwritten server-side, the client
+     * value is never trusted). Trial / Custom -> the days the user entered
+     * (DTO already guarantees 1..365 and non-null for Trial).
      */
+    private int resolveDurationDays(PackageDto.Request request) {
+        String cycle = request.getBillingCycle();
+        if ("Monthly".equals(cycle)) {
+            return MONTHLY_DAYS;
+        }
+        if ("Yearly".equals(cycle)) {
+            return YEARLY_DAYS;
+        }
+        Integer entered = request.getDurationDays();
+        if (entered == null || entered < 1) {
+            throw new ApiException("Please enter the number of trial days", HttpStatus.BAD_REQUEST);
+        }
+        return entered;
+    }
+
     private void validatePermissionFeaturesExist(List<PackageDto.Category> categories) {
         if (categories == null || categories.isEmpty()) {
             return;
@@ -274,8 +275,10 @@ public class PackageService {
         entity.setAvailablePackage(request.getAvailablePackage());
         entity.setName(request.getName().trim());
         entity.setDescription(request.getDescription());
-        entity.setPrice(request.getPrice());
+        // Trial is always free; every other package uses the price sent by the client.
+        entity.setPrice("Trial".equals(request.getAvailablePackage()) ? 0.0 : request.getPrice());
         entity.setBillingCycle(request.getBillingCycle());
+        entity.setDurationDays(resolveDurationDays(request));
         entity.setUserLimit(request.getUserLimit());
         entity.setStorageLimit(request.getStorageLimit());
         try {
@@ -293,6 +296,7 @@ public class PackageService {
         response.setDescription(entity.getDescription());
         response.setPrice(entity.getPrice());
         response.setBillingCycle(entity.getBillingCycle());
+        response.setDurationDays(effectiveDays(entity));
         response.setUserLimit(entity.getUserLimit());
         response.setStorageLimit(entity.getStorageLimit());
         response.setStatus(entity.getStatus());
@@ -307,11 +311,7 @@ public class PackageService {
                 response.setPermissions(List.of());
             }
         } catch (Exception e) {
-            // Defensive: a single row with malformed permissions_json (bad manual
-            // edit, corrupt migration, etc.) should not 500 the entire list/by-ids
-            // response for every other valid package. Log loudly so it's caught
-            // and fixed, but degrade this one record to an empty permission set
-            // instead of failing the whole request.
+            // A single row with malformed permissions_json must not 500 the whole list.
             log.error("Corrupt permissions_json for package id={}, returning empty permissions", entity.getId(), e);
             response.setPermissions(List.of());
         }

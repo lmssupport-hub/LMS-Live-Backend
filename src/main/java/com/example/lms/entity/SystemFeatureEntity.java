@@ -35,4 +35,11 @@ public class SystemFeatureEntity {
      */
     @Column(nullable = false)
     private boolean active = true;
+
+    /**
+     * Controls the order features/categories appear in the permission screen.
+     * Lower value = shown first. Categories follow the order of their first feature.
+     */
+    @Column(name = "display_order", nullable = false, columnDefinition = "integer default 0")
+    private int displayOrder = 0;
 }

@@ -26,7 +26,7 @@ public class PackageEntity {
     private Long id;
 
     @Column(name = "available_package", nullable = false)
-    private String availablePackage; // Basic / Standard / Premium / Existing
+    private String availablePackage; // Trial / Basic / Standard / Premium / Existing
 
     @Column(nullable = false, unique = true)
     private String name;
@@ -38,7 +38,15 @@ public class PackageEntity {
     private Double price;
 
     @Column(name = "billing_cycle", nullable = false)
-    private String billingCycle; // Monthly / Yearly
+    private String billingCycle; // Monthly / Yearly / Custom (Trial only)
+
+    /**
+     * Validity in days: 30 = Monthly, 365 = Yearly, user-entered for Trial.
+     * Nullable at DB level so old rows survive; the service falls back to
+     * 30/365 from billingCycle when it is null.
+     */
+    @Column(name = "duration_days")
+    private Integer durationDays;
 
     @Column(name = "user_limit", nullable = false)
     private Integer userLimit;
@@ -50,22 +58,8 @@ public class PackageEntity {
     private String status = "Active"; // Active / Inactive
 
     /**
-     * FIXED: was previously annotated @Lob. On Postgres, @Lob on a String
-     * field makes Hibernate treat this as a CLOB, which is read through
-     * Postgres's Large Object API (lo_open/lo_read). That API requires an
-     * active transaction with autocommit OFF — but plain read methods like
-     * PackageService.getAllPackages() have no @Transactional, so they run
-     * under Hikari's default autocommit=true. Every GET /api/packages call
-     * was therefore guaranteed to fail with:
-     *
-     *   org.postgresql.util.PSQLException: Large Objects may not be used
-     *   in auto-commit mode.
-     *
-     * The DB column is just `TEXT`, which Postgres treats identically to
-     * VARCHAR — there is no reason to route it through the Large Object
-     * subsystem at all. @JdbcTypeCode(SqlTypes.LONGVARCHAR) tells Hibernate
-     * to read/write this column with plain setString()/getString() calls
-     * instead, exactly like `description` above, avoiding LO entirely.
+     * Plain TEXT via LONGVARCHAR (not @Lob) to avoid Postgres Large Object
+     * auto-commit errors.
      */
     @JdbcTypeCode(SqlTypes.LONGVARCHAR)
     @Column(name = "permissions_json", columnDefinition = "TEXT")
