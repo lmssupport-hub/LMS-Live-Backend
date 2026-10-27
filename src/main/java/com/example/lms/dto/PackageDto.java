@@ -24,11 +24,11 @@ public class PackageDto {
     @NoArgsConstructor
     public static class Request {
 
-        // S#10 - Available Package (Trial / Basic / Standard / Premium / Existing)
-        @NotBlank(message = "Please select a package")
+        // S#10 - Package type (Price / Free). Replaces the old Available Package list.
+        @NotBlank(message = "Please select Price or Free")
         @Pattern(
-                regexp = "Trial|Basic|Standard|Premium|Existing",
-                message = "Please select a package"
+                regexp = "Price|Free",
+                message = "Please select Price or Free"
         )
         private String availablePackage;
 
@@ -40,12 +40,12 @@ public class PackageDto {
         // S#12 - Package Description (optional, max 500 words)
         private String description;
 
-        // S#13 - Price (mandatory). Trial: 0. Every other package: must be > 0 (see rule below).
+        // S#13 - Price (mandatory). Free: 0. Price type: must be > 0 (see rule below).
         @NotNull(message = "Price is required")
         @PositiveOrZero(message = "Price must not be negative")
         private Double price;
 
-        // S#14 - Billing Cycle (Monthly / Yearly, or Custom for Trial only)
+        // S#14 - Billing Cycle (Monthly / Yearly for Price type, or Custom for Free only)
         @NotBlank(message = "Please select a billing cycle")
         @Pattern(
                 regexp = "Monthly|Yearly|Custom",
@@ -54,7 +54,7 @@ public class PackageDto {
         private String billingCycle;
 
         // Validity in days.
-        //  - Trial   : entered by the user (1-365)
+        //  - Free    : entered by the user (1-365)
         //  - Monthly : overwritten by the service to 30
         //  - Yearly  : overwritten by the service to 365
         @Min(value = 1, message = "Days must be at least 1")
@@ -69,6 +69,12 @@ public class PackageDto {
         // S#16 - Storage Limit (optional, >= 0)
         @Min(value = 0, message = "Storage Limit must be zero or greater")
         private Integer storageLimit;
+
+        // Checkbox shown in the UI when package type = Free
+        private boolean autoAssignOnSignup;
+
+        // Checkbox shown in the UI when package type = Price
+        private boolean showOnWebsite;
 
         @NotEmpty(message = "Please configure the required permissions before saving")
         @Valid
@@ -89,7 +95,7 @@ public class PackageDto {
         }
 
         /**
-         * Trial must use the "Custom" billing cycle; every other package must
+         * Free must use the "Custom" billing cycle; Price type must
          * use Monthly or Yearly.
          */
         @AssertTrue(message = "Billing cycle is not valid for the selected package")
@@ -97,26 +103,26 @@ public class PackageDto {
             if (availablePackage == null || billingCycle == null) {
                 return true; // field-level @NotBlank reports these
             }
-            if ("Trial".equals(availablePackage)) {
+            if ("Free".equals(availablePackage)) {
                 return "Custom".equals(billingCycle);
             }
             return "Monthly".equals(billingCycle) || "Yearly".equals(billingCycle);
         }
 
-        /** Days are mandatory only for Trial. */
-        @AssertTrue(message = "Please enter the number of trial days")
+        /** Days are mandatory only for Free. */
+        @AssertTrue(message = "Please enter the number of days")
         public boolean isTrialDaysProvided() {
-            if (!"Trial".equals(availablePackage)) {
+            if (!"Free".equals(availablePackage)) {
                 return true;
             }
             return durationDays != null && durationDays >= 1;
         }
-        
-        /** Only Trial may be free; all other packages must have a price above zero. */
+
+        /** Only Free may have zero price; a Price package must have a price above zero. */
         @AssertTrue(message = "Price must be greater than zero")
         public boolean isPriceValidForPackage() {
             if (availablePackage == null || price == null) return true; // field-level checks report these
-            if ("Trial".equals(availablePackage)) return true;
+            if ("Free".equals(availablePackage)) return true;
             return price > 0;
         }
 
@@ -136,6 +142,19 @@ public class PackageDto {
         }
     }
 
+    /** Body of PATCH /api/packages/{id}/status. */
+    @Data
+    @NoArgsConstructor
+    public static class StatusRequest {
+
+        @NotBlank(message = "Please select a status")
+        @Pattern(
+                regexp = "Active|Inactive",
+                message = "Status must be Active or Inactive"
+        )
+        private String status;
+    }
+
     @Data
     @NoArgsConstructor
     public static class Response {
@@ -148,6 +167,8 @@ public class PackageDto {
         private Integer durationDays;
         private Integer userLimit;
         private Integer storageLimit;
+        private boolean autoAssignOnSignup;
+        private boolean showOnWebsite;
         private String status;
         private LocalDateTime createdAt;
         private List<Category> permissions;

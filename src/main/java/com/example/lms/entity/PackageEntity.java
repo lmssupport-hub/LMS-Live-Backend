@@ -54,6 +54,14 @@ public class PackageEntity {
     @Column(name = "storage_limit")
     private Integer storageLimit;
 
+    /** Trial checkbox: "Auto-assign on signup". The default keeps existing rows valid on ddl-auto update. */
+    @Column(name = "auto_assign_on_signup", nullable = false, columnDefinition = "boolean not null default false")
+    private boolean autoAssignOnSignup = false;
+
+    /** Non-Trial checkbox: "Show on website". The default keeps existing rows valid on ddl-auto update. */
+    @Column(name = "show_on_website", nullable = false, columnDefinition = "boolean not null default false")
+    private boolean showOnWebsite = false;
+
     @Column(nullable = false)
     private String status = "Active"; // Active / Inactive
 

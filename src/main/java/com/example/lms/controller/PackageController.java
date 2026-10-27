@@ -34,6 +34,15 @@ public class PackageController {
         return ResponseEntity.ok(packageService.updatePackage(id, request));
     }
 
+    /** Active / Inactive switch for a package. */
+    @PatchMapping("/{id}/status")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<PackageDto.Response> updateStatus(
+            @PathVariable Long id,
+            @Valid @RequestBody PackageDto.StatusRequest request) {
+        return ResponseEntity.ok(packageService.updatePackageStatus(id, request.getStatus()));
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
     public ResponseEntity<PackageDto.Response> getById(@PathVariable Long id) {

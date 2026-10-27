@@ -10,7 +10,9 @@ import com.example.lms.exception.RateLimitExceededException;
 import com.example.lms.repository.PackageRepository;
 import com.example.lms.repository.SystemFeatureRepository;
 import com.example.lms.repository.UserRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -39,7 +41,13 @@ public class PackageService {
 
     private static final Logger log = LoggerFactory.getLogger(PackageService.class);
 
-    /** Monthly = 30 days, Yearly = 365 days. Trial (Custom) uses the days the user entered. */
+    /** Category id (from SystemFeatureSeeder) that controls login access. */
+    public static final String AUTHENTICATION_CATEGORY_ID = "AUTHENTICATION";
+
+    /** Package type value for free packages. The other type is "Price". */
+    private static final String FREE_PACKAGE = "Free";
+
+    /** Monthly = 30 days, Yearly = 365 days. Free (Custom) uses the days the user entered. */
     private static final int MONTHLY_DAYS = 30;
     private static final int YEARLY_DAYS = 365;
 
@@ -51,12 +59,51 @@ public class PackageService {
     private final ConcurrentHashMap<String, Instant> recentSubmissions = new ConcurrentHashMap<>();
     private static final Duration DUPLICATE_SUBMIT_WINDOW = Duration.ofSeconds(5);
 
-    /**
-     * Features that represent a single yes/no capability rather than a
-     * CRUD-shaped permission. Mirrors the frontend's SINGLE_TOGGLE_FEATURE_IDS.
-     * The server never trusts the client alone for this rule.
-     */
     private static final Set<String> SINGLE_TOGGLE_FEATURE_IDS = Set.of("AUTH_USER_ACCESS");
+
+    /* ------------------------------------------------------------------ */
+    /*  Login access (used by LoginService)                               */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * True only if the package exists, is Active, and its AUTHENTICATION
+     * category is enabled. Fails CLOSED: null id, missing package, inactive
+     * package, or missing/corrupt permissions JSON all return false.
+     */
+    @Transactional(readOnly = true)
+    public boolean hasLoginAccess(Long packageId) {
+        if (packageId == null) {
+            return false;
+        }
+        return packageRepository.findById(packageId)
+                .filter(p -> "Active".equalsIgnoreCase(p.getStatus()))
+                .map(p -> isCategoryEnabled(p.getPermissionsJson(), AUTHENTICATION_CATEGORY_ID))
+                .orElse(false);
+    }
+
+    private boolean isCategoryEnabled(String permissionsJson, String categoryId) {
+        if (permissionsJson == null || permissionsJson.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(permissionsJson);
+            if (!root.isArray()) {
+                return false;
+            }
+            for (JsonNode category : root) {
+                if (categoryId.equals(category.path("id").asText())) {
+                    return category.path("enabled").asBoolean(false);
+                }
+            }
+        } catch (JsonProcessingException e) {
+            log.error("Corrupt permissions_json while checking '{}' access", categoryId, e);
+        }
+        return false;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Package CRUD                                                      */
+    /* ------------------------------------------------------------------ */
 
     @Transactional
     public PackageDto.Response createPackage(PackageDto.Request request, String idempotencyKey) {
@@ -92,6 +139,27 @@ public class PackageService {
         validatePermissionFeaturesExist(request.getPermissions());
 
         mapRequestToEntity(request, entity);
+        try {
+            PackageEntity saved = packageRepository.save(entity);
+            return mapEntityToResponse(saved);
+        } catch (ObjectOptimisticLockingFailureException ex) {
+            throw new ApiException(
+                    "This package has already been modified by another user. Please refresh and try again.",
+                    HttpStatus.CONFLICT);
+        }
+    }
+
+    /**
+     * Active <-> Inactive switch. Touches ONLY the status column; name, price,
+     * permissions etc. stay exactly as saved. Users on an Inactive package lose
+     * login access (see hasLoginAccess) and the package can no longer be assigned.
+     */
+    @Transactional
+    public PackageDto.Response updatePackageStatus(Long id, String status) {
+        PackageEntity entity = packageRepository.findById(id)
+                .orElseThrow(() -> new ApiException("Package not found", HttpStatus.NOT_FOUND));
+
+        entity.setStatus("Inactive".equalsIgnoreCase(status) ? "Inactive" : "Active");
         try {
             PackageEntity saved = packageRepository.save(entity);
             return mapEntityToResponse(saved);
@@ -166,11 +234,6 @@ public class PackageService {
         packageRepository.deleteById(id);
     }
 
-    /**
-     * Doc06 S#19-22 — assigns an existing package to an already-registered
-     * Admin, identified by email. Expiry is now computed from the package's
-     * durationDays (Monthly 30, Yearly 365, Trial = custom days).
-     */
     @Transactional
     public void assignPackageToUser(PackageAssignmentDto request) {
         PackageEntity packageEntity = packageRepository.findById(request.getPackageId())
@@ -191,10 +254,10 @@ public class PackageService {
         userRepository.save(user);
     }
 
-    /**
-     * Days a package is valid for. Uses the stored durationDays; falls back to
-     * 30 / 365 from the billing cycle for old rows saved before the column existed.
-     */
+    /* ------------------------------------------------------------------ */
+    /*  Helpers                                                           */
+    /* ------------------------------------------------------------------ */
+
     private int effectiveDays(PackageEntity entity) {
         if (entity.getDurationDays() != null && entity.getDurationDays() > 0) {
             return entity.getDurationDays();
@@ -202,11 +265,6 @@ public class PackageService {
         return "Yearly".equalsIgnoreCase(entity.getBillingCycle()) ? YEARLY_DAYS : MONTHLY_DAYS;
     }
 
-    /**
-     * Monthly -> 30, Yearly -> 365 (always overwritten server-side, the client
-     * value is never trusted). Trial / Custom -> the days the user entered
-     * (DTO already guarantees 1..365 and non-null for Trial).
-     */
     private int resolveDurationDays(PackageDto.Request request) {
         String cycle = request.getBillingCycle();
         if ("Monthly".equals(cycle)) {
@@ -217,7 +275,7 @@ public class PackageService {
         }
         Integer entered = request.getDurationDays();
         if (entered == null || entered < 1) {
-            throw new ApiException("Please enter the number of trial days", HttpStatus.BAD_REQUEST);
+            throw new ApiException("Please enter the number of days", HttpStatus.BAD_REQUEST);
         }
         return entered;
     }
@@ -272,15 +330,19 @@ public class PackageService {
     }
 
     private void mapRequestToEntity(PackageDto.Request request, PackageEntity entity) {
+        boolean free = FREE_PACKAGE.equals(request.getAvailablePackage());
+
         entity.setAvailablePackage(request.getAvailablePackage());
         entity.setName(request.getName().trim());
         entity.setDescription(request.getDescription());
-        // Trial is always free; every other package uses the price sent by the client.
-        entity.setPrice("Trial".equals(request.getAvailablePackage()) ? 0.0 : request.getPrice());
+        entity.setPrice(free ? 0.0 : request.getPrice());
         entity.setBillingCycle(request.getBillingCycle());
         entity.setDurationDays(resolveDurationDays(request));
         entity.setUserLimit(request.getUserLimit());
         entity.setStorageLimit(request.getStorageLimit());
+        // Free -> only "Auto-assign on signup" applies; Price -> only "Show on website" applies.
+        entity.setAutoAssignOnSignup(free && request.isAutoAssignOnSignup());
+        entity.setShowOnWebsite(!free && request.isShowOnWebsite());
         try {
             entity.setPermissionsJson(objectMapper.writeValueAsString(request.getPermissions()));
         } catch (Exception e) {
@@ -299,6 +361,8 @@ public class PackageService {
         response.setDurationDays(effectiveDays(entity));
         response.setUserLimit(entity.getUserLimit());
         response.setStorageLimit(entity.getStorageLimit());
+        response.setAutoAssignOnSignup(entity.isAutoAssignOnSignup());
+        response.setShowOnWebsite(entity.isShowOnWebsite());
         response.setStatus(entity.getStatus());
         response.setCreatedAt(entity.getCreatedAt());
         response.setVersion(entity.getVersion());
@@ -311,7 +375,6 @@ public class PackageService {
                 response.setPermissions(List.of());
             }
         } catch (Exception e) {
-            // A single row with malformed permissions_json must not 500 the whole list.
             log.error("Corrupt permissions_json for package id={}, returning empty permissions", entity.getId(), e);
             response.setPermissions(List.of());
         }
