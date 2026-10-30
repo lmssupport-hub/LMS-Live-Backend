@@ -60,7 +60,7 @@ public class LoginService {
 
             // Package gate: runs only after the password is verified, so it
             // never leaks package state to someone who doesn't know the password.
-            if (requiresPackageLoginAccess(user)) {
+            if (PackageService.isPackageGatedAdmin(user)) {
                 if (user.getPackageId() == null) {
                     throw new ApiException(NO_PACKAGE_MESSAGE, HttpStatus.FORBIDDEN);
                 }
@@ -90,15 +90,6 @@ public class LoginService {
             throw new ApiException("Unable to log in. Please try again later.",
                     HttpStatus.INTERNAL_SERVER_ERROR);
         }
-    }
-
-    /**
-     * Only the company's own ADMIN (self-signup, companyAdminId == null) is
-     * package-gated. SUPER_ADMIN is never gated; invited team members are
-     * controlled by Role Management, not by the package.
-     */
-    private boolean requiresPackageLoginAccess(User user) {
-        return "ADMIN".equalsIgnoreCase(user.getRole()) && user.getCompanyAdminId() == null;
     }
 
     private void registerFailedAttempt(User user) {

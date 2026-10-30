@@ -32,9 +32,13 @@ public class PackageDto {
         )
         private String availablePackage;
 
-        // S#11 - Package Name (3-100 chars, unique - uniqueness checked in service layer)
+        // S#11 - Package Name (3-100 chars, letters only - no numbers or spaces; uniqueness checked in service layer)
         @NotBlank(message = "Package Name is required")
         @Size(min = 3, max = 100, message = "Package Name must be at least 3 characters")
+        @Pattern(
+                regexp = "^[A-Za-z]+$",
+                message = "Package Name must contain only letters (no numbers or spaces)"
+        )
         private String name;
 
         // S#12 - Package Description (optional, max 500 words)
@@ -75,6 +79,11 @@ public class PackageDto {
 
         // Checkbox shown in the UI when package type = Price
         private boolean showOnWebsite;
+
+        // Active / Inactive toggle in the create/edit modal.
+        // Optional: null = Active on create, unchanged on update.
+        @Pattern(regexp = "Active|Inactive", message = "Status must be Active or Inactive")
+        private String status;
 
         @NotEmpty(message = "Please configure the required permissions before saving")
         @Valid
@@ -217,5 +226,28 @@ public class PackageDto {
         private String categoryId;
         private String categoryName;
         private List<Feature> features;
+    }
+
+    /** One row of "Assigned admins": who has the package, since when, and until when. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AdminAssignment {
+        private Long userId;
+        private LocalDateTime assignedAt;
+        private LocalDateTime expiresAt;
+    }
+
+    /** Logged-in admin's own package countdown (header "days left" pill). packageId/expiresAt null = no package. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MySubscription {
+        private Long packageId;
+        private String packageName;
+        private LocalDateTime assignedAt;
+        private LocalDateTime expiresAt;
+        /** Server clock at response time, so the browser can count down without depending on its own timezone. */
+        private LocalDateTime serverTime;
     }
 }

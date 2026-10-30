@@ -1,4 +1,6 @@
 package com.example.lms.controller;
+
+import com.example.lms.config.AuthPrincipal;
 import com.example.lms.dto.PackageAssignmentDto;
 import com.example.lms.dto.PackageDto;
 import com.example.lms.service.PackageService;
@@ -9,6 +11,7 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
@@ -86,6 +89,36 @@ public class PackageController {
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<Void> assign(@Valid @RequestBody PackageAssignmentDto request) {
         packageService.assignPackageToUser(request);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Logged-in admin's own package countdown (header "days left" pill).
+     * FIXED: the JWT filter sets an AuthPrincipal object as the principal (not an email string),
+     * so authentication.getName() never matched a user. We read the userId from the principal instead.
+     */
+    @GetMapping("/my-subscription")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
+    public ResponseEntity<PackageDto.MySubscription> mySubscription(Authentication authentication) {
+        Long userId = null;
+        if (authentication != null && authentication.getPrincipal() instanceof AuthPrincipal principal) {
+            userId = principal.getId();
+        }
+        return ResponseEntity.ok(packageService.getMySubscription(userId));
+    }
+
+    /** Assigned / expiry dates of the admins on this package. */
+    @GetMapping("/{packageId}/admins")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<List<PackageDto.AdminAssignment>> assignments(@PathVariable Long packageId) {
+        return ResponseEntity.ok(packageService.getAssignments(packageId));
+    }
+
+    /** Super Admin removes a package from one admin ("Unassign" button). */
+    @DeleteMapping("/{packageId}/admins/{userId}")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<Void> unassign(@PathVariable Long packageId, @PathVariable Long userId) {
+        packageService.unassignPackageFromUser(packageId, userId);
         return ResponseEntity.noContent().build();
     }
 }

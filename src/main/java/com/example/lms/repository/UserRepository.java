@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -25,4 +26,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     // FIXED - role is stored as "Instructor" in DB, not "INSTRUCTOR", so a plain
     // equality match was returning an empty list. IgnoreCase fixes that.
     List<User> findByRoleIgnoreCaseAndActiveTrue(String role);
+
+    // NEW - used by PackageExpiryScheduler: every admin whose package duration has ended.
+    List<User> findByPackageIdIsNotNullAndPackageExpiresAtLessThanEqual(LocalDateTime now);
+
+    // NEW - used by the Assigned admins list (remaining days).
+    List<User> findByPackageId(Long packageId);
 }

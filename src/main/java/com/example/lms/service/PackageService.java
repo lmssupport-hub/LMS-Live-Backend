@@ -62,7 +62,20 @@ public class PackageService {
     private static final Set<String> SINGLE_TOGGLE_FEATURE_IDS = Set.of("AUTH_USER_ACCESS");
 
     /* ------------------------------------------------------------------ */
-    /*  Login access (used by LoginService)                               */
+    /*  Who is package-gated                                              */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Only the company's own ADMIN (self-signup, companyAdminId == null) is package-gated.
+     * SUPER_ADMIN is never gated; invited team members are controlled by Role Management.
+     * Single source of truth: LoginService, JwtAuthenticationFilter and assign all use this.
+     */
+    public static boolean isPackageGatedAdmin(User user) {
+        return "ADMIN".equalsIgnoreCase(user.getRole()) && user.getCompanyAdminId() == null;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Login access (used by LoginService + JwtAuthenticationFilter)     */
     /* ------------------------------------------------------------------ */
 
     /**
@@ -117,6 +130,7 @@ public class PackageService {
 
         PackageEntity entity = new PackageEntity();
         mapRequestToEntity(request, entity);
+        ensureSingleAutoAssign(entity);
         PackageEntity saved = packageRepository.save(entity);
         return mapEntityToResponse(saved);
     }
@@ -139,6 +153,7 @@ public class PackageService {
         validatePermissionFeaturesExist(request.getPermissions());
 
         mapRequestToEntity(request, entity);
+        ensureSingleAutoAssign(entity);
         try {
             PackageEntity saved = packageRepository.save(entity);
             return mapEntityToResponse(saved);
@@ -150,9 +165,8 @@ public class PackageService {
     }
 
     /**
-     * Active <-> Inactive switch. Touches ONLY the status column; name, price,
-     * permissions etc. stay exactly as saved. Users on an Inactive package lose
-     * login access (see hasLoginAccess) and the package can no longer be assigned.
+     * Active <-> Inactive switch. Touches ONLY the status column. Users on an
+     * Inactive package lose access (see hasLoginAccess) and it can't be assigned.
      */
     @Transactional
     public PackageDto.Response updatePackageStatus(Long id, String status) {
@@ -160,6 +174,7 @@ public class PackageService {
                 .orElseThrow(() -> new ApiException("Package not found", HttpStatus.NOT_FOUND));
 
         entity.setStatus("Inactive".equalsIgnoreCase(status) ? "Inactive" : "Active");
+        ensureSingleAutoAssign(entity);
         try {
             PackageEntity saved = packageRepository.save(entity);
             return mapEntityToResponse(saved);
@@ -226,13 +241,25 @@ public class PackageService {
         return catalog;
     }
 
+    /**
+     * Deletes the package AND clears it from every admin who was on it,
+     * so no user is left with a dangling packageId.
+     */
     @Transactional
     public void deletePackage(Long id) {
         if (!packageRepository.existsById(id)) {
             throw new ApiException("Package not found", HttpStatus.NOT_FOUND);
         }
+        List<User> assigned = userRepository.findByPackageId(id);
+        assigned.forEach(this::clearPackage);
+        userRepository.saveAll(assigned);
+
         packageRepository.deleteById(id);
     }
+
+    /* ------------------------------------------------------------------ */
+    /*  Assign / Unassign / Expire / Auto-assign                          */
+    /* ------------------------------------------------------------------ */
 
     @Transactional
     public void assignPackageToUser(PackageAssignmentDto request) {
@@ -246,17 +273,119 @@ public class PackageService {
         User user = userRepository.findByEmailIgnoreCase(request.getEmailId())
                 .orElseThrow(() -> new ApiException("No admin account found for this email", HttpStatus.NOT_FOUND));
 
-        LocalDateTime now = LocalDateTime.now();
-        user.setPackageId(packageEntity.getId());
-        user.setPackageAssignedAt(now);
-        user.setPackageExpiresAt(now.plusDays(effectiveDays(packageEntity)));
+        if (!isPackageGatedAdmin(user)) {
+            throw new ApiException(
+                    "Packages can only be assigned to company admin accounts.", HttpStatus.BAD_REQUEST);
+        }
 
+        applyPackage(user, packageEntity);
         userRepository.save(user);
+    }
+
+    /**
+     * Called right after a new admin signs up. If there is a Free package with
+     * "Auto-assign on signup" ON and status Active, the new admin gets it.
+     * If none exists, nothing happens (Super Admin can assign manually later).
+     * Runs inside the signup transaction, so no separate @Transactional.
+     */
+    public void assignAutoPackageOnSignup(User user) {
+        if (!isPackageGatedAdmin(user)) {
+            return;
+        }
+        packageRepository
+                .findFirstByAvailablePackageAndAutoAssignOnSignupTrueAndStatusIgnoreCaseOrderByIdAsc(
+                        FREE_PACKAGE, "Active")
+                .ifPresent(pkg -> {
+                    applyPackage(user, pkg);
+                    userRepository.save(user);
+                });
+    }
+
+    /** Super Admin manually removes the package from ONE admin ("Unassign" button). */
+    @Transactional
+    public void unassignPackageFromUser(Long packageId, Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ApiException("Admin not found", HttpStatus.NOT_FOUND));
+
+        if (user.getPackageId() == null || !user.getPackageId().equals(packageId)) {
+            throw new ApiException("This admin is not assigned to this package", HttpStatus.BAD_REQUEST);
+        }
+
+        clearPackage(user);
+        userRepository.save(user);
+    }
+
+    /**
+     * Called by PackageExpiryScheduler: removes the package from every admin
+     * whose duration has ended (packageExpiresAt <= now).
+     */
+    @Transactional
+    public int expireDuePackages() {
+        List<User> due = userRepository
+                .findByPackageIdIsNotNullAndPackageExpiresAtLessThanEqual(LocalDateTime.now());
+        if (due.isEmpty()) {
+            return 0;
+        }
+        due.forEach(this::clearPackage);
+        userRepository.saveAll(due);
+        log.info("Expired packages removed from {} admin(s)", due.size());
+        return due.size();
+    }
+
+    /** Assigned / expiry dates of every admin on this package (for the remaining-days display). */
+    @Transactional(readOnly = true)
+    public List<PackageDto.AdminAssignment> getAssignments(Long packageId) {
+        if (!packageRepository.existsById(packageId)) {
+            throw new ApiException("Package not found", HttpStatus.NOT_FOUND);
+        }
+        return userRepository.findByPackageId(packageId).stream()
+                .map(u -> new PackageDto.AdminAssignment(u.getId(), u.getPackageAssignedAt(), u.getPackageExpiresAt()))
+                .collect(Collectors.toList());
+    }
+
+    /** Package countdown for the logged-in admin (header "days left" pill). */
+    @Transactional(readOnly = true)
+    public PackageDto.MySubscription getMySubscription(Long userId) {
+        LocalDateTime now = LocalDateTime.now();
+        User user = userId == null ? null : userRepository.findById(userId).orElse(null);
+        if (user == null || user.getPackageId() == null) {
+            return new PackageDto.MySubscription(null, null, null, null, now);
+        }
+        String name = packageRepository.findById(user.getPackageId())
+                .map(PackageEntity::getName)
+                .orElse(null);
+        return new PackageDto.MySubscription(
+                user.getPackageId(), name, user.getPackageAssignedAt(), user.getPackageExpiresAt(), now);
+    }
+
+    private void applyPackage(User user, PackageEntity pkg) {
+        LocalDateTime now = LocalDateTime.now();
+        user.setPackageId(pkg.getId());
+        user.setPackageAssignedAt(now);
+        user.setPackageExpiresAt(now.plusDays(effectiveDays(pkg)));
+    }
+
+    private void clearPackage(User user) {
+        user.setPackageId(null);
+        user.setPackageAssignedAt(null);
+        user.setPackageExpiresAt(null);
     }
 
     /* ------------------------------------------------------------------ */
     /*  Helpers                                                           */
     /* ------------------------------------------------------------------ */
+
+    /** Rendu Active package "auto-assign on signup" la irukka koodadhu. */
+    private void ensureSingleAutoAssign(PackageEntity entity) {
+        if (!entity.isAutoAssignOnSignup() || !"Active".equalsIgnoreCase(entity.getStatus())) {
+            return;
+        }
+        Long selfId = entity.getId() == null ? -1L : entity.getId();
+        if (packageRepository.existsByAutoAssignOnSignupTrueAndStatusIgnoreCaseAndIdNot("Active", selfId)) {
+            throw new ApiException(
+                    "Another active package is already set to auto-assign on signup.", HttpStatus.CONFLICT);
+        }
+    }
 
     private int effectiveDays(PackageEntity entity) {
         if (entity.getDurationDays() != null && entity.getDurationDays() > 0) {
@@ -343,6 +472,10 @@ public class PackageService {
         // Free -> only "Auto-assign on signup" applies; Price -> only "Show on website" applies.
         entity.setAutoAssignOnSignup(free && request.isAutoAssignOnSignup());
         entity.setShowOnWebsite(!free && request.isShowOnWebsite());
+        // Status toggle from the create/edit modal (null = keep current; new packages default to Active).
+        if (request.getStatus() != null) {
+            entity.setStatus("Inactive".equalsIgnoreCase(request.getStatus()) ? "Inactive" : "Active");
+        }
         try {
             entity.setPermissionsJson(objectMapper.writeValueAsString(request.getPermissions()));
         } catch (Exception e) {

@@ -1,4 +1,5 @@
 package com.example.lms.service;
+
 import com.example.lms.dto.SignUpDto;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class SignUpService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final PackageService packageService;
 
     @Transactional
     public SignUpDto.SignUpResponse signUp(SignUpDto.SignUpRequest request) {
@@ -60,6 +62,10 @@ public class SignUpService {
             } catch (DataIntegrityViolationException e) {
                 throw new ApiException("Email ID already exists.", HttpStatus.CONFLICT);
             }
+
+            // Free + "Auto-assign on signup" + Active package irundha, new admin-ku assign pannum.
+            packageService.assignAutoPackageOnSignup(saved);
+
             return SignUpDto.SignUpResponse.builder()
                     .id(saved.getId())
                     .firstName(saved.getFirstName())
