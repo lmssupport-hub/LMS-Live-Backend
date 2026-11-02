@@ -20,10 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 @Service
 public class MultimediaService {
@@ -50,6 +52,13 @@ public class MultimediaService {
             Map.entry("png", "IMAGE"),
             Map.entry("zip", "ARCHIVE")
     );
+
+    /**
+     * Stored by Cloudinary as "raw" files. For these the extension must be part of the public id,
+     * otherwise the delivery URL does not end with ".docx" etc. and online viewers
+     * (Microsoft / Google) cannot open the file.
+     */
+    private static final Set<String> RAW_EXTENSIONS = Set.of("docx", "pptx", "xlsx", "zip");
 
     // SRS Defaults: file types and max size are configurable by the system administrator.
     @Value("${app.multimedia.allowed-extensions:mp4,mp3,pdf,docx,pptx,xlsx,jpg,jpeg,png,zip}")
@@ -91,7 +100,7 @@ public class MultimediaService {
             throw new ApiException("A resource with the same name already exists in this section.", HttpStatus.CONFLICT);
         }
 
-        StoredFile stored = uploadToStorage(file, courseId, sectionId);
+        StoredFile stored = uploadToStorage(file, courseId, sectionId, extension);
 
         MultimediaEntity entity = MultimediaEntity.builder()
                 .section(section)
@@ -160,7 +169,7 @@ public class MultimediaService {
         // File is optional on edit: only replaced when a new one is sent.
         if (file != null && !file.isEmpty()) {
             String extension = validateFile(file);
-            newFile = uploadToStorage(file, courseId, sectionId);
+            newFile = uploadToStorage(file, courseId, sectionId, extension);
             entity.setResourceType(EXTENSION_TO_TYPE.getOrDefault(extension, "OTHER"));
             entity.setFileUrl(newFile.url());
             entity.setStoragePublicId(newFile.publicId());
@@ -284,17 +293,23 @@ public class MultimediaService {
 
     // ---------- storage (Cloudinary) ----------
 
-    private StoredFile uploadToStorage(MultipartFile file, Long courseId, Long sectionId) {
+    private StoredFile uploadToStorage(MultipartFile file, Long courseId, Long sectionId, String extension) {
         try {
-            Map<?, ?> result = cloudinary.uploader().upload(
-                    file.getBytes(),
-                    ObjectUtils.asMap(
-                            "folder", "lms/multimedia/course-" + courseId + "/section-" + sectionId,
-                            "resource_type", "auto",   // image / video (incl. audio) / raw are detected automatically
-                            "use_filename", true,
-                            "unique_filename", true
-                    )
-            );
+            Map<String, Object> options = new HashMap<>();
+            options.put("folder", "lms/multimedia/course-" + courseId + "/section-" + sectionId);
+
+            if (RAW_EXTENSIONS.contains(extension)) {
+                // raw files: keep the extension INSIDE the public id so the URL ends with ".docx" etc.
+                options.put("resource_type", "raw");
+                options.put("public_id", safeBaseName(file.getOriginalFilename())
+                        + "_" + UUID.randomUUID().toString().substring(0, 8) + "." + extension);
+            } else {
+                options.put("resource_type", "auto");   // image / video (incl. audio) / pdf are detected automatically
+                options.put("use_filename", true);
+                options.put("unique_filename", true);
+            }
+
+            Map<?, ?> result = cloudinary.uploader().upload(file.getBytes(), options);
             Object secureUrl = result.get("secure_url");
             Object publicId = result.get("public_id");
             Object resourceType = result.get("resource_type");
@@ -307,6 +322,16 @@ public class MultimediaService {
             log.error("Failed to upload multimedia to Cloudinary. originalFilename='{}'", file.getOriginalFilename(), e);
             throw new ApiException("Unable to upload file. Please try again.", HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /** File name without extension, reduced to URL-safe characters (used as part of the Cloudinary public id). */
+    private String safeBaseName(String filename) {
+        String base = filename == null ? "file" : filename;
+        int dot = base.lastIndexOf('.');
+        if (dot > 0) base = base.substring(0, dot);
+        base = base.replaceAll("[^A-Za-z0-9_-]", "_");
+        if (base.length() > 60) base = base.substring(0, 60);
+        return base.isBlank() ? "file" : base;
     }
 
     // Best effort: a failed cleanup must never fail the user's request.
