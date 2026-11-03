@@ -77,6 +77,9 @@ public class SecurityConfig {
                                 .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
                 )
                 .authorizeHttpRequests(auth -> auth
+                        // NEW - change password needs a logged-in user. MUST stay ABOVE the
+                        // "/api/auth/**" permitAll rule below (first matching rule wins).
+                        .requestMatchers("/api/auth/change-password").authenticated()
                         .requestMatchers("/api/auth/**").permitAll()
                         // Invited person isn't logged in yet when reading invite details / accepting.
                         // Sending an invite (POST /api/invites) stays behind authentication.

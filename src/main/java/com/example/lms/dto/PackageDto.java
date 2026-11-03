@@ -85,7 +85,8 @@ public class PackageDto {
         @Pattern(regexp = "Active|Inactive", message = "Status must be Active or Inactive")
         private String status;
 
-        @NotEmpty(message = "Please configure the required permissions before saving")
+        // CHANGED: message now "Please select an item or feature"
+        @NotEmpty(message = "Please select an item or feature")
         @Valid
         private List<Category> permissions;
 
@@ -135,7 +136,8 @@ public class PackageDto {
             return price > 0;
         }
 
-        @AssertTrue(message = "Please configure the required permissions before saving")
+        // CHANGED: message now "Please select an item or feature"
+        @AssertTrue(message = "Please select an item or feature")
         public boolean isAtLeastOnePermissionEnabled() {
             if (permissions == null || permissions.isEmpty()) {
                 return false;

@@ -21,14 +21,26 @@ public class GlobalExceptionHandler {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    /**
+     * CHANGED: the response "message" is now the FIRST specific validation message
+     * (e.g. "Please select an item or feature") instead of the generic
+     * "Please correct the validation errors before submitting." text.
+     * The full field -> message map is still returned in "data".
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = new LinkedHashMap<>();
         ex.getBindingResult().getFieldErrors().forEach(fe ->
-                fieldErrors.put(fe.getField(), fe.getDefaultMessage()));
+                fieldErrors.putIfAbsent(fe.getField(), fe.getDefaultMessage()));
+
+        String message = fieldErrors.values().stream()
+                .filter(m -> m != null && !m.isBlank())
+                .findFirst()
+                .orElse("Please correct the validation errors before submitting.");
+
         ApiResponse<Map<String, String>> body = ApiResponse.<Map<String, String>>builder()
                 .success(false)
-                .message("Please correct the validation errors before submitting.")
+                .message(message)
                 .data(fieldErrors)
                 .build();
         return ResponseEntity.badRequest().body(body);
