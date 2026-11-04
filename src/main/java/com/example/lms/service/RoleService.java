@@ -1,9 +1,12 @@
 package com.example.lms.service;
 
+import com.example.lms.dto.PackageDto;
 import com.example.lms.dto.RoleDto;
 import com.example.lms.entity.RoleEntity;
+import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.RoleRepository;
+import com.example.lms.repository.UserRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -12,7 +15,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -23,46 +28,95 @@ public class RoleService {
     private static final Set<String> VALID_STATUSES = Set.of("Active", "Inactive");
 
     private final RoleRepository roleRepository;
+    private final UserRepository userRepository;
+    private final PackageService packageService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /* ---------- tenant helpers ---------- */
+
+    private Long ownerOf(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ApiException("User not found.", HttpStatus.UNAUTHORIZED));
+        return PackageService.resolveOwnerId(user);
+    }
+
+    private RoleEntity findOwned(Long id, Long ownerId) {
+        // Same 404 for "doesn't exist" and "belongs to another company" -> no ID probing.
+        return roleRepository.findByIdAndCreatedByAdminId(id, ownerId)
+                .orElseThrow(() -> new ApiException("Role not found.", HttpStatus.NOT_FOUND));
+    }
+
+    /* ---------- package-filtered catalog (feeds the Role Permission screen) ---------- */
+
+    @Transactional(readOnly = true)
+    public List<PackageDto.FeatureCatalogEntry> getAvailableCatalog(Long userId) {
+        Long ownerId = ownerOf(userId);
+        return packageService.getAllowedPermissionsForOwner(ownerId).stream()
+                .map(c -> new PackageDto.FeatureCatalogEntry(c.getId(), c.getName(), c.getFeatures()))
+                .collect(Collectors.toList());
+    }
+
+    /** Server-side guard: a role can never contain more than the admin's package allows. */
+    private void assertWithinPackage(Long ownerId, List<PackageDto.Category> requested) {
+        if (requested == null) return;
+
+        Map<String, PackageDto.Permission> allowed = new HashMap<>();
+        for (PackageDto.Category c : packageService.getAllowedPermissionsForOwner(ownerId)) {
+            for (PackageDto.Feature f : c.getFeatures()) {
+                allowed.put(c.getId() + ":" + f.getId(), f.getPermissions());
+            }
+        }
+        for (PackageDto.Category c : requested) {
+            if (c.getFeatures() == null) continue;
+            for (PackageDto.Feature f : c.getFeatures()) {
+                PackageDto.Permission want = f.getPermissions();
+                if (want == null) continue;
+                PackageDto.Permission have = allowed.get(c.getId() + ":" + f.getId());
+                boolean exceeds = (want.isCreate() && (have == null || !have.isCreate()))
+                        || (want.isRead() && (have == null || !have.isRead()))
+                        || (want.isUpdate() && (have == null || !have.isUpdate()))
+                        || (want.isDelete() && (have == null || !have.isDelete()));
+                if (exceeds) {
+                    throw new ApiException(
+                            "\"" + f.getName() + "\" is not included in your package.", HttpStatus.FORBIDDEN);
+                }
+            }
+        }
+    }
+
+    /* ---------- CRUD (all owner-scoped) ---------- */
+
     @Transactional
-    public RoleDto.Response createRole(Long adminId, RoleDto.Request request) {
-        // SRS: "Role names must be unique in the system" — checked globally,
-        // not per-admin, since roles (Admin/Instructor/Learner/etc.) are
-        // shared system-wide, not private to the admin who created them.
-        if (roleRepository.existsByNameIgnoreCase(request.getName())) {
+    public RoleDto.Response createRole(Long userId, RoleDto.Request request) {
+        Long ownerId = ownerOf(userId);
+        if (roleRepository.existsByCreatedByAdminIdAndNameIgnoreCase(ownerId, request.getName())) {
             throw new ApiException("Role already exists.", HttpStatus.CONFLICT);
         }
+        assertWithinPackage(ownerId, request.getPermissions());
 
         RoleEntity entity = new RoleEntity();
-        entity.setCreatedByAdminId(adminId);
-        entity.setStatus("Active"); // SRS: "Role Status defaults to Active when creating a new role"
+        entity.setCreatedByAdminId(ownerId); // owner = company admin, even if a team member creates it
+        entity.setStatus("Active");
         mapRequestToEntity(request, entity);
-
         try {
             return mapEntityToResponse(roleRepository.save(entity));
         } catch (DataIntegrityViolationException e) {
-            // Belt-and-braces against the race where two admins submit the
-            // same new Role Name at the same instant (SRS edge case: both
-            // requests pass the existsByNameIgnoreCase() check above before
-            // either commits). The DB's unique constraint on `name` is what
-            // actually stops the second insert.
             throw new ApiException("Role already exists.", HttpStatus.CONFLICT);
         }
     }
 
     @Transactional
-    public RoleDto.Response updateRole(Long id, RoleDto.Request request) {
-        RoleEntity entity = roleRepository.findById(id)
-                .orElseThrow(() -> new ApiException("Role not found.", HttpStatus.NOT_FOUND));
+    public RoleDto.Response updateRole(Long userId, Long id, RoleDto.Request request) {
+        Long ownerId = ownerOf(userId);
+        RoleEntity entity = findOwned(id, ownerId);
 
         if (!entity.getName().equalsIgnoreCase(request.getName())
-                && roleRepository.existsByNameIgnoreCaseAndIdNot(request.getName(), id)) {
+                && roleRepository.existsByCreatedByAdminIdAndNameIgnoreCaseAndIdNot(ownerId, request.getName(), id)) {
             throw new ApiException("Role already exists.", HttpStatus.CONFLICT);
         }
+        assertWithinPackage(ownerId, request.getPermissions());
 
         mapRequestToEntity(request, entity);
-
         try {
             return mapEntityToResponse(roleRepository.save(entity));
         } catch (DataIntegrityViolationException e) {
@@ -70,44 +124,41 @@ public class RoleService {
         }
     }
 
-    public RoleDto.Response getRoleById(Long id) {
-        RoleEntity entity = roleRepository.findById(id)
-                .orElseThrow(() -> new ApiException("Role not found.", HttpStatus.NOT_FOUND));
-        return mapEntityToResponse(entity);
+    @Transactional(readOnly = true)
+    public RoleDto.Response getRoleById(Long userId, Long id) {
+        return mapEntityToResponse(findOwned(id, ownerOf(userId)));
     }
 
-    // Full list — used in the Admin's Role Management / list screen (all statuses)
-    public List<RoleDto.Response> getAllRoles() {
-        return roleRepository.findAll().stream()
+    @Transactional(readOnly = true)
+    public List<RoleDto.Response> getAllRoles(Long userId) {
+        return roleRepository.findAllByCreatedByAdminId(ownerOf(userId)).stream()
                 .map(this::mapEntityToResponse)
                 .collect(Collectors.toList());
     }
 
-    // SRS: "Available Roles dropdown displays all active roles" — used for the dropdown specifically
-    public List<RoleDto.Response> getActiveRoles() {
-        return roleRepository.findAllByStatus("Active").stream()
+    @Transactional(readOnly = true)
+    public List<RoleDto.Response> getActiveRoles(Long userId) {
+        return roleRepository.findAllByCreatedByAdminIdAndStatus(ownerOf(userId), "Active").stream()
                 .map(this::mapEntityToResponse)
                 .collect(Collectors.toList());
     }
 
     @Transactional
-    public RoleDto.Response updateStatus(Long id, String status) {
+    public RoleDto.Response updateStatus(Long userId, Long id, String status) {
         if (status == null || !VALID_STATUSES.contains(status)) {
             throw new ApiException("Status must be either 'Active' or 'Inactive'.", HttpStatus.BAD_REQUEST);
         }
-        RoleEntity entity = roleRepository.findById(id)
-                .orElseThrow(() -> new ApiException("Role not found.", HttpStatus.NOT_FOUND));
+        RoleEntity entity = findOwned(id, ownerOf(userId));
         entity.setStatus(status);
         return mapEntityToResponse(roleRepository.save(entity));
     }
 
     @Transactional
-    public void deleteRole(Long id) {
-        if (!roleRepository.existsById(id)) {
-            throw new ApiException("Role not found.", HttpStatus.NOT_FOUND);
-        }
-        roleRepository.deleteById(id);
+    public void deleteRole(Long userId, Long id) {
+        roleRepository.delete(findOwned(id, ownerOf(userId)));
     }
+
+    /* ---------- mapping ---------- */
 
     private void mapRequestToEntity(RoleDto.Request request, RoleEntity entity) {
         entity.setName(request.getName());
@@ -130,8 +181,7 @@ public class RoleService {
         try {
             if (entity.getPermissionsJson() != null) {
                 response.setPermissions(objectMapper.readValue(
-                        entity.getPermissionsJson(),
-                        new TypeReference<List<com.example.lms.dto.PackageDto.Category>>() {}));
+                        entity.getPermissionsJson(), new TypeReference<List<PackageDto.Category>>() {}));
             }
         } catch (Exception e) {
             throw new ApiException("Failed to load role permissions.", HttpStatus.INTERNAL_SERVER_ERROR);

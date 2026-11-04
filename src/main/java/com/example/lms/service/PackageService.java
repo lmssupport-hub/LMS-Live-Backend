@@ -74,6 +74,11 @@ public class PackageService {
         return "ADMIN".equalsIgnoreCase(user.getRole()) && user.getCompanyAdminId() == null;
     }
 
+    /** Tenant owner of any user: the company admin for team members, the user itself otherwise. */
+    public static Long resolveOwnerId(User user) {
+        return user.getCompanyAdminId() != null ? user.getCompanyAdminId() : user.getId();
+    }
+
     /* ------------------------------------------------------------------ */
     /*  Login access (used by LoginService + JwtAuthenticationFilter)     */
     /* ------------------------------------------------------------------ */
@@ -112,6 +117,74 @@ public class PackageService {
             log.error("Corrupt permissions_json while checking '{}' access", categoryId, e);
         }
         return false;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Package-allowed permissions (used by Role Management)             */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * What this company admin's package allows, keeping only features that have
+     * at least one action ON. Fails CLOSED: no package / inactive / expired -> empty.
+     * SUPER_ADMIN is not package-gated -> every feature, every action.
+     */
+    @Transactional(readOnly = true)
+    public List<PackageDto.Category> getAllowedPermissionsForOwner(Long ownerId) {
+        User owner = userRepository.findById(ownerId)
+                .orElseThrow(() -> new ApiException("Admin not found", HttpStatus.NOT_FOUND));
+
+        if ("SUPER_ADMIN".equalsIgnoreCase(owner.getRole())) {
+            return getFeatureCatalog().stream().map(entry -> {
+                PackageDto.Category c = new PackageDto.Category();
+                c.setId(entry.getCategoryId());
+                c.setName(entry.getCategoryName());
+                c.setEnabled(true);
+                c.setFeatures(entry.getFeatures().stream().map(f -> {
+                    PackageDto.Feature nf = new PackageDto.Feature();
+                    nf.setId(f.getId());
+                    nf.setName(f.getName());
+                    nf.setPermissions(new PackageDto.Permission(true, true, true, true));
+                    return nf;
+                }).collect(Collectors.toList()));
+                return c;
+            }).collect(Collectors.toList());
+        }
+
+        if (owner.getPackageId() == null || owner.isPackageExpired()) {
+            return List.of();
+        }
+        PackageEntity pkg = packageRepository.findById(owner.getPackageId())
+                .filter(p -> "Active".equalsIgnoreCase(p.getStatus()))
+                .orElse(null);
+        if (pkg == null || pkg.getPermissionsJson() == null || pkg.getPermissionsJson().isBlank()) {
+            return List.of();
+        }
+
+        List<PackageDto.Category> categories;
+        try {
+            categories = objectMapper.readValue(pkg.getPermissionsJson(),
+                    new TypeReference<List<PackageDto.Category>>() {});
+        } catch (Exception e) {
+            log.error("Corrupt permissions_json for package id={}", pkg.getId(), e);
+            return List.of();
+        }
+
+        List<PackageDto.Category> result = new ArrayList<>();
+        for (PackageDto.Category c : categories) {
+            if (c.getFeatures() == null) continue;
+            List<PackageDto.Feature> kept = c.getFeatures().stream()
+                    .filter(f -> f.getPermissions() != null && anyOn(f.getPermissions()))
+                    .collect(Collectors.toList());
+            if (kept.isEmpty()) continue;
+            c.setFeatures(kept);
+            c.setEnabled(true);
+            result.add(c);
+        }
+        return result;
+    }
+
+    private static boolean anyOn(PackageDto.Permission p) {
+        return p.isCreate() || p.isRead() || p.isUpdate() || p.isDelete();
     }
 
     /* ------------------------------------------------------------------ */
@@ -213,6 +286,7 @@ public class PackageService {
                 .map(this::mapEntityToResponse);
     }
 
+    /** Full system feature list (all-false flags). Used by the Super Admin package permission step. */
     @Transactional(readOnly = true)
     public List<PackageDto.FeatureCatalogEntry> getFeatureCatalog() {
         List<SystemFeatureEntity> features = systemFeatureRepository.findByActiveTrueOrderByDisplayOrderAscIdAsc();

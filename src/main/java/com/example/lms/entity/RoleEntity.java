@@ -7,8 +7,18 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
+/**
+ * Roles are owned by a company admin (tenant). created_by_admin_id = the tenant owner
+ * (the company admin's user id, even when a team member creates the role).
+ * Role names are unique PER OWNER, not system-wide.
+ */
 @Entity
-@Table(name = "roles", uniqueConstraints = @UniqueConstraint(columnNames = "name"))
+@Table(
+        name = "roles",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_roles_owner_name",
+                columnNames = {"created_by_admin_id", "name"})
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -27,15 +37,12 @@ public class RoleEntity {
     @Column(name = "permissions_json", columnDefinition = "TEXT")
     private String permissionsJson;
 
-    // Audit only — who created the role. Roles themselves are system-wide
-    // (SRS: "Role names must be unique in the system"; the Available Roles
-    // dropdown lists ALL active roles, not just the current admin's roles),
-    // so this is NOT used to scope or restrict queries.
+    /** Tenant owner (company admin id). All role queries are scoped by this column. */
     @Column(name = "created_by_admin_id", nullable = false)
     private Long createdByAdminId;
 
     @Column(nullable = false)
-    private String status = "Active"; // Active / Inactive — SRS: defaults to Active on creation
+    private String status = "Active"; // Active / Inactive
 
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
