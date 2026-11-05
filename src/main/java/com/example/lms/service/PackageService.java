@@ -3,10 +3,12 @@ package com.example.lms.service;
 import com.example.lms.dto.PackageAssignmentDto;
 import com.example.lms.dto.PackageDto;
 import com.example.lms.entity.PackageEntity;
+import com.example.lms.entity.PackagePurchaseEntity;
 import com.example.lms.entity.SystemFeatureEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.exception.RateLimitExceededException;
+import com.example.lms.repository.PackagePurchaseRepository;
 import com.example.lms.repository.PackageRepository;
 import com.example.lms.repository.SystemFeatureRepository;
 import com.example.lms.repository.UserRepository;
@@ -54,6 +56,8 @@ public class PackageService {
     private final PackageRepository packageRepository;
     private final SystemFeatureRepository systemFeatureRepository;
     private final UserRepository userRepository;
+    /** Permanent revenue ledger (one row per package assignment). */
+    private final PackagePurchaseRepository purchaseRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final ConcurrentHashMap<String, Instant> recentSubmissions = new ConcurrentHashMap<>();
@@ -318,6 +322,7 @@ public class PackageService {
     /**
      * Deletes the package AND clears it from every admin who was on it,
      * so no user is left with a dangling packageId.
+     * Revenue history (package_purchases) is NOT touched - it is permanent.
      */
     @Transactional
     public void deletePackage(Long id) {
@@ -432,11 +437,25 @@ public class PackageService {
                 user.getPackageId(), name, user.getPackageAssignedAt(), user.getPackageExpiresAt(), now);
     }
 
+    /**
+     * Gives the package to the user AND writes a permanent row in package_purchases
+     * (date + price snapshot). That ledger is what the Super Admin revenue chart reads,
+     * so revenue stays even after the package expires, is unassigned or is deleted.
+     * Always runs inside the caller's transaction (assign / signup).
+     */
     private void applyPackage(User user, PackageEntity pkg) {
         LocalDateTime now = LocalDateTime.now();
         user.setPackageId(pkg.getId());
         user.setPackageAssignedAt(now);
         user.setPackageExpiresAt(now.plusDays(effectiveDays(pkg)));
+
+        PackagePurchaseEntity purchase = new PackagePurchaseEntity();
+        purchase.setUserId(user.getId());
+        purchase.setPackageId(pkg.getId());
+        purchase.setPackageName(pkg.getName());
+        purchase.setPrice(pkg.getPrice());
+        purchase.setPurchasedAt(now);
+        purchaseRepository.save(purchase);
     }
 
     private void clearPackage(User user) {
