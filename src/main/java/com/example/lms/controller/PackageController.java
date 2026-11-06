@@ -48,8 +48,8 @@ public class PackageController {
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
-    public ResponseEntity<PackageDto.Response> getById(@PathVariable Long id) {
-        return ResponseEntity.ok(packageService.getPackageById(id));
+    public ResponseEntity<PackageDto.Response> getById(@PathVariable Long id, Authentication authentication) {
+        return ResponseEntity.ok(packageService.getPackageById(id, userIdOf(authentication), isSuperAdmin(authentication)));
     }
 
     /**
@@ -59,8 +59,8 @@ public class PackageController {
      */
     @GetMapping("/by-ids")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
-    public ResponseEntity<List<PackageDto.Response>> getByIds(@RequestParam List<Long> ids) {
-        return ResponseEntity.ok(packageService.getPackagesByIds(ids));
+    public ResponseEntity<List<PackageDto.Response>> getByIds(@RequestParam List<Long> ids, Authentication authentication) {
+        return ResponseEntity.ok(packageService.getPackagesByIds(ids, userIdOf(authentication), isSuperAdmin(authentication)));
     }
 
     @GetMapping
@@ -68,8 +68,9 @@ public class PackageController {
     public ResponseEntity<Page<PackageDto.Response>> getAll(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String status,
-            @PageableDefault(size = 20, sort = "name") Pageable pageable) {
-        return ResponseEntity.ok(packageService.getAllPackages(search, status, pageable));
+            @PageableDefault(size = 20, sort = "name") Pageable pageable,
+            Authentication authentication) {
+        return ResponseEntity.ok(packageService.getAllPackages(search, status, pageable, isSuperAdmin(authentication)));
     }
 
     @DeleteMapping("/{id}")
@@ -93,6 +94,18 @@ public class PackageController {
     }
 
     /**
+     * Company admin buys a package for THEMSELVES (Subscription -> Payment page).
+     * Only the JWT user can receive the package; price/duration come from the DB.
+     */
+    @PostMapping("/purchase")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<PackageDto.MySubscription> purchase(
+            @Valid @RequestBody PackageDto.PurchaseRequest request,
+            Authentication authentication) {
+        return ResponseEntity.ok(packageService.purchasePackage(userIdOf(authentication), request));
+    }
+
+    /**
      * Logged-in admin's own package countdown (header "days left" pill).
      * FIXED: the JWT filter sets an AuthPrincipal object as the principal (not an email string),
      * so authentication.getName() never matched a user. We read the userId from the principal instead.
@@ -105,6 +118,13 @@ public class PackageController {
             userId = principal.getId();
         }
         return ResponseEntity.ok(packageService.getMySubscription(userId));
+    }
+
+    /** NEW: billing details the logged-in admin entered when subscribing (Manage Details -> Billing tab). */
+    @GetMapping("/my-billing")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<PackageDto.MyBilling> myBilling(Authentication authentication) {
+        return ResponseEntity.ok(packageService.getMyBilling(userIdOf(authentication)));
     }
 
     /** Assigned / expiry dates of the admins on this package. */
@@ -120,5 +140,17 @@ public class PackageController {
     public ResponseEntity<Void> unassign(@PathVariable Long packageId, @PathVariable Long userId) {
         packageService.unassignPackageFromUser(packageId, userId);
         return ResponseEntity.noContent().build();
+    }
+
+    private static Long userIdOf(Authentication authentication) {
+        if (authentication != null && authentication.getPrincipal() instanceof AuthPrincipal principal) {
+            return principal.getId();
+        }
+        return null;
+    }
+
+    private static boolean isSuperAdmin(Authentication authentication) {
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
     }
 }

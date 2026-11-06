@@ -2,12 +2,14 @@ package com.example.lms.service;
 
 import com.example.lms.dto.PackageAssignmentDto;
 import com.example.lms.dto.PackageDto;
+import com.example.lms.entity.BillingDetailsEntity;
 import com.example.lms.entity.PackageEntity;
 import com.example.lms.entity.PackagePurchaseEntity;
 import com.example.lms.entity.SystemFeatureEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.exception.RateLimitExceededException;
+import com.example.lms.repository.BillingDetailsRepository;
 import com.example.lms.repository.PackagePurchaseRepository;
 import com.example.lms.repository.PackageRepository;
 import com.example.lms.repository.SystemFeatureRepository;
@@ -19,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -58,6 +61,8 @@ public class PackageService {
     private final UserRepository userRepository;
     /** Permanent revenue ledger (one row per package assignment). */
     private final PackagePurchaseRepository purchaseRepository;
+    /** NEW: latest billing details entered on the Payment page (one row per admin). */
+    private final BillingDetailsRepository billingRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final ConcurrentHashMap<String, Instant> recentSubmissions = new ConcurrentHashMap<>();
@@ -262,31 +267,62 @@ public class PackageService {
         }
     }
 
+    /**
+     * A company ADMIN may only see packages the Super Admin published on the website
+     * (Active + "Price" + showOnWebsite = true) and the package they already own.
+     * Super Admin sees everything. Fails closed: hidden packages look like "not found".
+     */
+    private boolean isVisibleToAdmin(PackageEntity p, Long viewerPackageId) {
+        boolean published = p.isShowOnWebsite()
+                && "Active".equalsIgnoreCase(p.getStatus())
+                && "Price".equals(p.getAvailablePackage());
+        boolean own = viewerPackageId != null && viewerPackageId.equals(p.getId());
+        return published || own;
+    }
+
+    private Long packageIdOf(Long userId) {
+        if (userId == null) return null;
+        return userRepository.findById(userId).map(User::getPackageId).orElse(null);
+    }
+
     @Transactional(readOnly = true)
-    public PackageDto.Response getPackageById(Long id) {
+    public PackageDto.Response getPackageById(Long id, Long viewerUserId, boolean superAdmin) {
         PackageEntity entity = packageRepository.findById(id)
                 .orElseThrow(() -> new ApiException("Package not found", HttpStatus.NOT_FOUND));
+        if (!superAdmin && !isVisibleToAdmin(entity, packageIdOf(viewerUserId))) {
+            throw new ApiException("Package not found", HttpStatus.NOT_FOUND);
+        }
         return mapEntityToResponse(entity);
     }
 
     @Transactional(readOnly = true)
-    public List<PackageDto.Response> getPackagesByIds(List<Long> ids) {
+    public List<PackageDto.Response> getPackagesByIds(List<Long> ids, Long viewerUserId, boolean superAdmin) {
         if (ids == null || ids.isEmpty()) {
             return List.of();
         }
+        Long ownPackageId = superAdmin ? null : packageIdOf(viewerUserId);
         return packageRepository.findAllById(ids).stream()
+                .filter(p -> superAdmin || isVisibleToAdmin(p, ownPackageId))
                 .map(this::mapEntityToResponse)
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Super Admin: every package (optional status/search filter).
+     * Company ADMIN: only Active + Price + showOnWebsite packages - the status filter
+     * from the client is ignored for them, so they can never list hidden or inactive plans.
+     */
     @Transactional(readOnly = true)
-    public Page<PackageDto.Response> getAllPackages(String search, String status, Pageable pageable) {
+    public Page<PackageDto.Response> getAllPackages(String search, String status, Pageable pageable, boolean superAdmin) {
         String normalizedSearch = (search == null || search.isBlank()) ? null : search.trim();
         String normalizedStatus = (status == null || status.isBlank() || "All".equalsIgnoreCase(status))
                 ? null
                 : status.trim();
+        if (!superAdmin) {
+            normalizedStatus = "Active";
+        }
 
-        return packageRepository.search(normalizedStatus, normalizedSearch, pageable)
+        return packageRepository.search(normalizedStatus, normalizedSearch, !superAdmin, pageable)
                 .map(this::mapEntityToResponse);
     }
 
@@ -361,6 +397,135 @@ public class PackageService {
         userRepository.save(user);
     }
 
+    /* ------------------------------------------------------------------ */
+    /*  Admin buys a package for themselves (Subscription -> Payment)     */
+    /* ------------------------------------------------------------------ */
+
+    /** TEMP test gateway. Set payment.test-mode=true only in dev/staging; defaults to OFF (fails closed). */
+    @Value("${payment.test-mode:false}")
+    private boolean paymentTestMode;
+
+    private static final String TEST_CARD_NUMBER = "1111111111111111";
+    private static final String TEST_CARD_CVC = "123";
+    private static final String TEST_OTP = "111111";
+
+    private static final int MAX_FAILED_PAYMENTS = 5;
+    private static final Duration FAILED_PAYMENT_WINDOW = Duration.ofMinutes(10);
+    /** userId -> {failure count, window start}. Stops brute-forcing the OTP / card check. */
+    private final ConcurrentHashMap<Long, long[]> failedPayments = new ConcurrentHashMap<>();
+
+    /**
+     * The logged-in company admin buys a package. The server decides everything:
+     *  - the user comes from the JWT (never from the body),
+     *  - the package must be Active, "Price" type and showOnWebsite = true,
+     *  - the price/duration come from the DB (never from the client),
+     *  - payment must pass the (test) gateway check.
+     * On success the billing details are saved, the package is assigned and a
+     * package_purchases ledger row is written (all in one transaction).
+     */
+    @Transactional
+    public PackageDto.MySubscription purchasePackage(Long userId, PackageDto.PurchaseRequest request) {
+        if (userId == null) {
+            throw new ApiException("Authentication is required to access this resource.", HttpStatus.UNAUTHORIZED);
+        }
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ApiException("Admin not found", HttpStatus.NOT_FOUND));
+        if (!isPackageGatedAdmin(user)) {
+            throw new ApiException("Only company admin accounts can buy a package.", HttpStatus.FORBIDDEN);
+        }
+
+        PackageEntity pkg = packageRepository.findById(request.getPackageId())
+                .filter(p -> isVisibleToAdmin(p, null))   // published + Active + Price only
+                .orElseThrow(() -> new ApiException("Package not found", HttpStatus.NOT_FOUND));
+
+        verifyTestPayment(userId, request);
+
+        // NEW: only reached after a successful payment check, so a failed payment never saves billing.
+        saveBillingDetails(user, request.getBilling());
+
+        applyPackage(user, pkg);
+        userRepository.save(user);
+        failedPayments.remove(userId);
+        return getMySubscription(userId);
+    }
+
+    private void verifyTestPayment(Long userId, PackageDto.PurchaseRequest request) {
+        if (!paymentTestMode) {
+            // No real gateway connected and test mode is off -> never grant a package for free.
+            throw new ApiException("Online payment is not available right now.", HttpStatus.SERVICE_UNAVAILABLE);
+        }
+
+        long now = System.currentTimeMillis();
+        long[] state = failedPayments.compute(userId, (k, v) ->
+                (v == null || now - v[1] > FAILED_PAYMENT_WINDOW.toMillis()) ? new long[]{0, now} : v);
+        if (state[0] >= MAX_FAILED_PAYMENTS) {
+            throw new RateLimitExceededException("Too many failed payment attempts. Please try again later.");
+        }
+
+        String card = request.getCardNumber().replaceAll("\\s", "");
+        boolean ok = constantTimeEquals(card, TEST_CARD_NUMBER)
+                & constantTimeEquals(request.getCvc(), TEST_CARD_CVC)
+                & constantTimeEquals(request.getOtp(), TEST_OTP);
+        if (!ok) {
+            state[0]++;
+            throw new ApiException("Payment failed. Please check your card details and verification code.",
+                    HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private static boolean constantTimeEquals(String a, String b) {
+        return java.security.MessageDigest.isEqual(
+                a.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                b.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Billing details (Manage Details -> Billing Details tab)           */
+    /* ------------------------------------------------------------------ */
+
+    /** Upserts the admin's latest billing details (one row per user). No card data here. */
+    private void saveBillingDetails(User user, PackageDto.BillingRequest b) {
+        BillingDetailsEntity entity = billingRepository.findByUserId(user.getId())
+                .orElseGet(BillingDetailsEntity::new);
+        entity.setUserId(user.getId());
+        entity.setBillingName(resolveBillingName(b, user));
+        entity.setCompanyName(blankToNull(b.getCompanyName()));
+        entity.setEmail(b.getEmail().trim());
+        entity.setAddress(b.getAddress().trim());
+        entity.setCity(b.getCity().trim());
+        entity.setState(blankToNull(b.getState()));
+        entity.setPostalCode(b.getPostalCode().trim());
+        entity.setCountry(b.getCountry().trim());
+        entity.setVatNumber(blankToNull(b.getVatNumber()));
+        billingRepository.save(entity);
+    }
+
+    /** "First Last" from the billing form; falls back to the account name if both are empty. */
+    private String resolveBillingName(PackageDto.BillingRequest b, User user) {
+        String first = b.getFirstName() == null ? "" : b.getFirstName().trim();
+        String last = b.getLastName() == null ? "" : b.getLastName().trim();
+        String name = (first + " " + last).trim();
+        return name.isEmpty() ? (user.getFirstName() + " " + user.getLastName()).trim() : name;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** Billing details of the logged-in admin. Empty (all null) when nothing was saved yet. */
+    @Transactional(readOnly = true)
+    public PackageDto.MyBilling getMyBilling(Long userId) {
+        PackageDto.MyBilling empty = new PackageDto.MyBilling(null, null, null, null, null, null, null, null, null);
+        if (userId == null) {
+            return empty;
+        }
+        return billingRepository.findByUserId(userId)
+                .map(e -> new PackageDto.MyBilling(
+                        e.getBillingName(), e.getCompanyName(), e.getEmail(), e.getAddress(),
+                        e.getCity(), e.getState(), e.getPostalCode(), e.getCountry(), e.getVatNumber()))
+                .orElse(empty);
+    }
+
     /**
      * Called right after a new admin signs up. If there is a Free package with
      * "Auto-assign on signup" ON and status Active, the new admin gets it.
@@ -422,7 +587,7 @@ public class PackageService {
                 .collect(Collectors.toList());
     }
 
-    /** Package countdown for the logged-in admin (header "days left" pill). */
+    /** Package countdown for the logged-in admin (header "days left" pill + Manage Details). */
     @Transactional(readOnly = true)
     public PackageDto.MySubscription getMySubscription(Long userId) {
         LocalDateTime now = LocalDateTime.now();

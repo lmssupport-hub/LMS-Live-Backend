@@ -25,15 +25,22 @@ public interface PackageRepository extends JpaRepository<PackageEntity, Long> {
     boolean existsByAutoAssignOnSignupTrueAndStatusIgnoreCaseAndIdNot(String status, Long id);
 
     /**
-     * Search by Package Name + Status filter. status/search null = "All" / no search text.
+     * Search by Package Name + Status filter.
+     * status/search null = "All" / no search text.
+     * websiteOnly = true  -> ONLY paid ("Price") packages with showOnWebsite = true
+     *                        (what a company admin may see/buy on the Subscription page).
+     * websiteOnly = false -> no website filter (Super Admin).
      * CAST(... AS string): null bind parameter Postgres-la bytea nu resolve aagama irukka.
      */
     @Query("""
             SELECT p FROM PackageEntity p
             WHERE (:status IS NULL OR p.status = CAST(:status AS string))
               AND (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', CAST(:search AS string), '%')))
+              AND (:websiteOnly = false
+                   OR (p.showOnWebsite = true AND p.availablePackage = 'Price'))
             """)
     Page<PackageEntity> search(@Param("status") String status,
                                @Param("search") String search,
+                               @Param("websiteOnly") boolean websiteOnly,
                                Pageable pageable);
 }

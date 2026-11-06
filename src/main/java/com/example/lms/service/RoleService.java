@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 public class RoleService {
 
     private static final Set<String> VALID_STATUSES = Set.of("Active", "Inactive");
+    private static final String ROLE_EXISTS = "Role already exists.";
 
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
@@ -44,6 +45,14 @@ public class RoleService {
         // Same 404 for "doesn't exist" and "belongs to another company" -> no ID probing.
         return roleRepository.findByIdAndCreatedByAdminId(id, ownerId)
                 .orElseThrow(() -> new ApiException("Role not found.", HttpStatus.NOT_FOUND));
+    }
+
+    private static String normalizeName(String name) {
+        if (name == null || name.isBlank()) {
+            throw new ApiException("Role Name is required.", HttpStatus.BAD_REQUEST);
+        }
+        // trim + collapse repeated spaces: "Content   Manager " -> "Content Manager"
+        return name.trim().replaceAll("\\s+", " ");
     }
 
     /* ---------- package-filtered catalog (feeds the Role Permission screen) ---------- */
@@ -89,39 +98,35 @@ public class RoleService {
     @Transactional
     public RoleDto.Response createRole(Long userId, RoleDto.Request request) {
         Long ownerId = ownerOf(userId);
-        if (roleRepository.existsByCreatedByAdminIdAndNameIgnoreCase(ownerId, request.getName())) {
-            throw new ApiException("Role already exists.", HttpStatus.CONFLICT);
+        String name = normalizeName(request.getName());
+
+        // Scoped to THIS company only. Another company's "Instructor" never conflicts.
+        if (roleRepository.existsByCreatedByAdminIdAndNameIgnoreCase(ownerId, name)) {
+            throw new ApiException(ROLE_EXISTS, HttpStatus.CONFLICT);
         }
         assertWithinPackage(ownerId, request.getPermissions());
 
         RoleEntity entity = new RoleEntity();
         entity.setCreatedByAdminId(ownerId); // owner = company admin, even if a team member creates it
         entity.setStatus("Active");
-        mapRequestToEntity(request, entity);
-        try {
-            return mapEntityToResponse(roleRepository.save(entity));
-        } catch (DataIntegrityViolationException e) {
-            throw new ApiException("Role already exists.", HttpStatus.CONFLICT);
-        }
+        mapRequestToEntity(request, name, entity);
+        return saveOrConflict(entity);
     }
 
     @Transactional
     public RoleDto.Response updateRole(Long userId, Long id, RoleDto.Request request) {
         Long ownerId = ownerOf(userId);
         RoleEntity entity = findOwned(id, ownerId);
+        String name = normalizeName(request.getName());
 
-        if (!entity.getName().equalsIgnoreCase(request.getName())
-                && roleRepository.existsByCreatedByAdminIdAndNameIgnoreCaseAndIdNot(ownerId, request.getName(), id)) {
-            throw new ApiException("Role already exists.", HttpStatus.CONFLICT);
+        // Excludes this role itself (IdNot), so saving without renaming never errors.
+        if (roleRepository.existsByCreatedByAdminIdAndNameIgnoreCaseAndIdNot(ownerId, name, id)) {
+            throw new ApiException(ROLE_EXISTS, HttpStatus.CONFLICT);
         }
         assertWithinPackage(ownerId, request.getPermissions());
 
-        mapRequestToEntity(request, entity);
-        try {
-            return mapEntityToResponse(roleRepository.save(entity));
-        } catch (DataIntegrityViolationException e) {
-            throw new ApiException("Role already exists.", HttpStatus.CONFLICT);
-        }
+        mapRequestToEntity(request, name, entity);
+        return saveOrConflict(entity);
     }
 
     @Transactional(readOnly = true)
@@ -158,10 +163,22 @@ public class RoleService {
         roleRepository.delete(findOwned(id, ownerOf(userId)));
     }
 
-    /* ---------- mapping ---------- */
+    /* ---------- persistence + mapping ---------- */
 
-    private void mapRequestToEntity(RoleDto.Request request, RoleEntity entity) {
-        entity.setName(request.getName());
+    /**
+     * saveAndFlush so a unique-constraint race (two requests at once) is caught HERE
+     * and turned into a 409, instead of surfacing later as a 500 at commit time.
+     */
+    private RoleDto.Response saveOrConflict(RoleEntity entity) {
+        try {
+            return mapEntityToResponse(roleRepository.saveAndFlush(entity));
+        } catch (DataIntegrityViolationException e) {
+            throw new ApiException(ROLE_EXISTS, HttpStatus.CONFLICT);
+        }
+    }
+
+    private void mapRequestToEntity(RoleDto.Request request, String normalizedName, RoleEntity entity) {
+        entity.setName(normalizedName);
         entity.setDescription(request.getDescription());
         try {
             entity.setPermissionsJson(objectMapper.writeValueAsString(request.getPermissions()));

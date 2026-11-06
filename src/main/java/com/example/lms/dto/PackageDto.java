@@ -2,6 +2,7 @@ package com.example.lms.dto;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -240,6 +241,87 @@ public class PackageDto {
         private LocalDateTime expiresAt;
     }
 
+    /**
+     * Billing form from the Payment page. Stored for display only (Manage Details ->
+     * Billing Details); it is never used to decide what is charged.
+     */
+    @Data
+    @NoArgsConstructor
+    public static class BillingRequest {
+
+        @Size(max = 100, message = "First name is too long")
+        private String firstName;
+
+        @Size(max = 100, message = "Last name is too long")
+        private String lastName;
+
+        @Size(max = 200, message = "Company name is too long")
+        private String companyName;
+
+        @NotBlank(message = "Billing email is required")
+        @Email(message = "Enter a valid email address")
+        @Size(max = 100, message = "Enter a valid email address")
+        private String email;
+
+        @NotBlank(message = "Billing address is required")
+        @Size(max = 200, message = "Billing address is too long")
+        private String address;
+
+        @NotBlank(message = "City is required")
+        @Size(max = 100, message = "City is too long")
+        private String city;
+
+        @NotBlank(message = "Postal code is required")
+        @Size(max = 100, message = "Postal code is too long")
+        private String postalCode;
+
+        @Size(max = 100, message = "State is too long")
+        private String state;
+
+        @NotBlank(message = "Country is required")
+        @Size(max = 100, message = "Country is too long")
+        private String country;
+
+        @Size(max = 50, message = "VAT number is too long")
+        private String vatNumber;
+    }
+
+    /**
+     * Body of POST /api/packages/purchase (company admin buys a package for THEMSELVES).
+     * The user is taken from the JWT, never from this body, so nobody can buy for someone else.
+     * Card data is only validated, never stored or logged.
+     * TEMP: until a real gateway (Stripe etc.) is connected, the service checks these against a test card.
+     */
+    @Data
+    @NoArgsConstructor
+    public static class PurchaseRequest {
+
+        @NotNull(message = "Please select a package")
+        @Positive(message = "Please select a package")
+        private Long packageId;
+
+        @NotBlank(message = "Card number is required")
+        @Pattern(regexp = "^[0-9 ]{13,23}$", message = "Enter a valid card number")
+        private String cardNumber;
+
+        @NotBlank(message = "Expiry date is required")
+        @Pattern(regexp = "^(0[1-9]|1[0-2])/[0-9]{2}$", message = "Enter the expiry date as MM/YY")
+        private String expiry;
+
+        @NotBlank(message = "CVC is required")
+        @Pattern(regexp = "^[0-9]{3,4}$", message = "Enter a 3 or 4 digit CVC")
+        private String cvc;
+
+        @NotBlank(message = "Verification code is required")
+        @Pattern(regexp = "^[0-9]{4,8}$", message = "Enter a code containing 4 to 8 digits")
+        private String otp;
+
+        /** NEW: billing form values, saved so Manage Details can show them later. */
+        @NotNull(message = "Billing details are required")
+        @Valid
+        private BillingRequest billing;
+    }
+
     /** Logged-in admin's own package countdown (header "days left" pill). packageId/expiresAt null = no package. */
     @Data
     @NoArgsConstructor
@@ -251,5 +333,21 @@ public class PackageDto {
         private LocalDateTime expiresAt;
         /** Server clock at response time, so the browser can count down without depending on its own timezone. */
         private LocalDateTime serverTime;
+    }
+
+    /** NEW: response of GET /api/packages/my-billing. All fields null = nothing saved yet. */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MyBilling {
+        private String billingName;
+        private String companyName;
+        private String email;
+        private String address;
+        private String city;
+        private String state;
+        private String postalCode;
+        private String country;
+        private String vatNumber;
     }
 }
