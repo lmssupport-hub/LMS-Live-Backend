@@ -8,6 +8,7 @@ import com.example.lms.service.MultimediaService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -29,6 +30,7 @@ public class MultimediaController {
     // Both are required=false so the service returns the SRS messages
     // ("Resource Name is required." / "File is required.") instead of a generic 500.
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("@perm.can(authentication, 'CONTENT_MGMT_MULTIMEDIA', 'create')")
     public ResponseEntity<ApiResponse<MultimediaDto.MultimediaResponse>> uploadResource(
             @PathVariable Long courseId,
             @PathVariable Long sectionId,
@@ -58,6 +60,7 @@ public class MultimediaController {
     }
 
     @PutMapping(value = "/{resourceId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("@perm.can(authentication, 'CONTENT_MGMT_MULTIMEDIA', 'update')")
     public ResponseEntity<ApiResponse<MultimediaDto.MultimediaResponse>> updateResource(
             @PathVariable Long courseId,
             @PathVariable Long sectionId,
@@ -69,6 +72,7 @@ public class MultimediaController {
     }
 
     @DeleteMapping("/{resourceId}")
+    @PreAuthorize("@perm.can(authentication, 'CONTENT_MGMT_MULTIMEDIA', 'delete')")
     public ResponseEntity<ApiResponse<Void>> deleteResource(
             @PathVariable Long courseId,
             @PathVariable Long sectionId,

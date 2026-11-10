@@ -111,6 +111,8 @@ public class CourseService {
             return getCoursesForLearner(user.getEmail());
         }
         boolean manager = access.isFullAccess()
+                // company admin: sees every course of the company as soon as the package gives Course List "read"
+                || (access.isCompanyAdmin() && access.allows(PermissionService.COURSE_LIST, "read"))
                 || access.allows(PermissionService.COURSE_CREATE, "create")
                 || access.allows(PermissionService.COURSE_CREATE, "update")
                 || access.allows(PermissionService.COURSE_CREATE, "delete")

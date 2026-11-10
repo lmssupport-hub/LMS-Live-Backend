@@ -23,7 +23,7 @@ public class SectionController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
+    @PreAuthorize("@perm.can(authentication, 'COURSE_MGMT_ORGANIZE_MODULES', 'create')")
     public ResponseEntity<SectionDto.ApiResponse<SectionDto.SectionResponse>> createSection(
             @PathVariable Long courseId,
             @Valid @RequestBody SectionDto.SectionRequest request) {
@@ -49,7 +49,7 @@ public class SectionController {
     }
 
     @PutMapping("/{sectionId}")
-    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
+    @PreAuthorize("@perm.can(authentication, 'COURSE_MGMT_ORGANIZE_MODULES', 'update')")
     public ResponseEntity<SectionDto.ApiResponse<SectionDto.SectionResponse>> updateSection(
             @PathVariable Long courseId,
             @PathVariable Long sectionId,
@@ -59,7 +59,7 @@ public class SectionController {
     }
 
     @DeleteMapping("/{sectionId}")
-    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
+    @PreAuthorize("@perm.can(authentication, 'COURSE_MGMT_ORGANIZE_MODULES', 'delete')")
     public ResponseEntity<SectionDto.ApiResponse<Void>> deleteSection(
             @PathVariable Long courseId,
             @PathVariable Long sectionId) {
@@ -68,7 +68,7 @@ public class SectionController {
     }
 
     @PatchMapping("/reorder")
-    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
+    @PreAuthorize("@perm.can(authentication, 'COURSE_MGMT_ORGANIZE_MODULES', 'update')")
     public ResponseEntity<SectionDto.ApiResponse<List<SectionDto.SectionResponse>>> reorderSections(
             @PathVariable Long courseId,
             @Valid @RequestBody SectionDto.ReorderRequest request) {

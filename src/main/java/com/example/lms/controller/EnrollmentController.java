@@ -15,13 +15,12 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * SRS: Admins and Instructors may view the Enrolled Course List, enroll and unenroll users.
- * Learners have no access to any of these endpoints.
+ * Access is permission based (Role Management / Package): Enrolled Course List (read) and
+ * Enroll/Unenroll in Course (create / delete). A role without them has no access to these endpoints.
  */
 @RestController
 @RequestMapping("/api/courses/{courseId}")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
 public class EnrollmentController {
 
     private static final int MAX_PAGE_SIZE = 100;
@@ -30,6 +29,7 @@ public class EnrollmentController {
 
     /** Enrolled Course List for the selected course. */
     @GetMapping("/enrollments")
+    @PreAuthorize("@perm.can(authentication, 'ENROLLMENT_ENROLLED_LIST', 'read')")
     public ResponseEntity<ApiResponse<Page<EnrollmentDto.EnrolledLearnerResponse>>> getEnrolledLearners(
             @PathVariable Long courseId,
             @RequestParam(defaultValue = "0") int page,
@@ -42,6 +42,7 @@ public class EnrollmentController {
 
     /** Options for the Enroll User Form's multi-select (active learners not yet enrolled). */
     @GetMapping("/eligible-users")
+    @PreAuthorize("@perm.can(authentication, 'ENROLLMENT_ENROLL_UNENROLL', 'create')")
     public ResponseEntity<ApiResponse<List<EnrollmentDto.EligibleUserResponse>>> getEligibleUsers(
             @PathVariable Long courseId,
             @RequestParam(required = false) String search,
@@ -53,6 +54,7 @@ public class EnrollmentController {
 
     /** "Enroll Selected User(s)" button. */
     @PostMapping("/enrollments")
+    @PreAuthorize("@perm.can(authentication, 'ENROLLMENT_ENROLL_UNENROLL', 'create')")
     public ResponseEntity<ApiResponse<EnrollmentDto.EnrollmentActionResponse>> enrollUsers(
             @PathVariable Long courseId,
             @Valid @RequestBody EnrollmentDto.UserIdsRequest request) {
@@ -63,6 +65,7 @@ public class EnrollmentController {
 
     /** More Actions (⋮) -> Unenroll. POST (not DELETE) because it carries a body of ids. */
     @PostMapping("/enrollments/unenroll")
+    @PreAuthorize("@perm.can(authentication, 'ENROLLMENT_ENROLL_UNENROLL', 'delete')")
     public ResponseEntity<ApiResponse<EnrollmentDto.EnrollmentActionResponse>> unenrollUsers(
             @PathVariable Long courseId,
             @Valid @RequestBody EnrollmentDto.UserIdsRequest request) {

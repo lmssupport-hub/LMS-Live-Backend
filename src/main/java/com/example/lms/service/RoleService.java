@@ -27,6 +27,9 @@ public class RoleService {
 
     private static final Set<String> VALID_STATUSES = Set.of("Active", "Inactive");
     private static final String ROLE_EXISTS = "Role already exists.";
+    /** Names that mean "owner" in the system. A custom role may never use them (compared ignoring case, spaces, "_" and "-"). */
+    private static final Set<String> RESERVED_ROLE_NAMES = Set.of("ADMIN", "SUPERADMIN");
+    private static final String ROLE_RESERVED = "This role name is reserved. Please choose a different name.";
 
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
@@ -52,7 +55,12 @@ public class RoleService {
             throw new ApiException("Role Name is required.", HttpStatus.BAD_REQUEST);
         }
         // trim + collapse repeated spaces: "Content   Manager " -> "Content Manager"
-        return name.trim().replaceAll("\\s+", " ");
+        String normalized = name.trim().replaceAll("\\s+", " ");
+        String key = normalized.toUpperCase(java.util.Locale.ROOT).replaceAll("[\\s_\\-]+", "");
+        if (RESERVED_ROLE_NAMES.contains(key)) {
+            throw new ApiException(ROLE_RESERVED, HttpStatus.BAD_REQUEST);
+        }
+        return normalized;
     }
 
     /* ---------- package-filtered catalog (feeds the Role Permission screen) ---------- */

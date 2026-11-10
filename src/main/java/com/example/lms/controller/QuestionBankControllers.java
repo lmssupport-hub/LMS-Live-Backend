@@ -30,7 +30,7 @@ public class QuestionBankControllers {
     @RestController
     @RequestMapping("/api/courses/{courseId}/sections/{sectionId}/question-banks")
     @SecurityRequirement(name = "bearerAuth")
-    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
+    @PreAuthorize("@perm.can(authentication, 'COURSE_MGMT_ORGANIZE_MODULES', 'update')")
     public static class QuestionBankController {
 
         private final QuestionBankService bankService;
@@ -81,7 +81,7 @@ public class QuestionBankControllers {
     @RestController
     @RequestMapping("/api/courses/{courseId}/sections/{sectionId}/question-banks/{bankId}/question-sections")
     @SecurityRequirement(name = "bearerAuth")
-    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")
+    @PreAuthorize("@perm.can(authentication, 'COURSE_MGMT_ORGANIZE_MODULES', 'update')")
     public static class QuestionSectionController {
 
         private final QuestionSectionService service;
@@ -148,7 +148,7 @@ public class QuestionBankControllers {
     @RequestMapping("/api/courses/{courseId}/sections/{sectionId}/question-banks/{bankId}"
             + "/question-sections/{questionSectionId}/questions")
     @SecurityRequirement(name = "bearerAuth")
-    @PreAuthorize("hasAnyRole('ADMIN','INSTRUCTOR')")   // SRS: only Admin and Instructor manage Question Banks
+    @PreAuthorize("@perm.can(authentication, 'COURSE_MGMT_ORGANIZE_MODULES', 'update')")   // whoever may organize modules manages Question Banks
     public static class QuestionController {
 
         private final QuestionService questionService;

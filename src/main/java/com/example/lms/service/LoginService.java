@@ -87,6 +87,7 @@ public class LoginService {
                     .email(user.getEmail())
                     .role(user.getRole())
                     .fullAccess(access.isFullAccess())
+                    .companyAdmin(access.isCompanyAdmin())
                     .permissions(access.getPermissions())
                     .build();
 

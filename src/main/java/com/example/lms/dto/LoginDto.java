@@ -65,9 +65,11 @@ public class LoginDto {
         private String lastName;
         private String email;
         private String role;
-        /** True for company ADMIN / SUPER_ADMIN: every action is allowed. */
+        /** True for SUPER_ADMIN only: every action is allowed. */
         private boolean fullAccess;
-        /** Grants of the user's role (empty when fullAccess is true). */
+        /** True for the company's own ADMIN: Dashboard + Role Management + Subscription are always shown. */
+        private boolean companyAdmin;
+        /** Grants the user has (package-limited for ADMIN, role-based for everyone else). Empty when fullAccess. */
         private java.util.List<PermissionDto.Grant> permissions;
     }
 }

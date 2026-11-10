@@ -9,7 +9,8 @@ import java.util.Locale;
 /**
  * What the logged-in user is allowed to do, flattened from their role's permission tree.
  * Sent to the Angular app (login response + GET /api/profile/permissions) so the UI can
- * enable only the options the role grants. The server still enforces the same rules.
+ * show only the menus / buttons the user is allowed to use. The server still enforces the
+ * same rules on every API call.
  */
 public class PermissionDto {
 
@@ -37,19 +38,27 @@ public class PermissionDto {
         }
     }
 
-    /** fullAccess = company ADMIN / SUPER_ADMIN (every action); otherwise the role's grants. */
+    /**
+     * fullAccess   = SUPER_ADMIN (app owner) only: every action, nothing to look up.
+     * companyAdmin = the company's own ADMIN (self-signup). Always sees Dashboard,
+     *                Role Management and Subscription; every other menu comes from the
+     *                package ({@link #permissions} = what the package allows).
+     * Everyone else (Instructor, Learner, any custom role) gets the role's grants limited
+     * to what the company's package allows.
+     */
     @Getter
     @AllArgsConstructor
     public static class Snapshot {
         private final boolean fullAccess;
+        private final boolean companyAdmin;
         private final List<Grant> permissions;
 
         public static Snapshot none() {
-            return new Snapshot(false, List.of());
+            return new Snapshot(false, false, List.of());
         }
 
         public static Snapshot full() {
-            return new Snapshot(true, List.of());
+            return new Snapshot(true, false, List.of());
         }
 
         public boolean allows(String featureId, String action) {

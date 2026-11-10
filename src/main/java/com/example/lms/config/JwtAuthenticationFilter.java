@@ -18,6 +18,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 
 
 @Component
@@ -41,7 +42,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                 
                 if (user != null && isSessionAllowed(user)) {
-                    var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole()));
+                    var authorities = List.of(new SimpleGrantedAuthority(toAuthority(user)));
                     var principal = new AuthPrincipal(user.getId(), user.getEmail(), user.getRole());
                     var authToken = new UsernamePasswordAuthenticationToken(principal, null, authorities);
                     SecurityContextHolder.getContext().setAuthentication(authToken);
@@ -49,6 +50,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * Spring authority for the user's role. The role is stored the way it was typed in Role Management
+     * ("Instructor", "Content Manager"), so it is upper-cased and spaces become "_":
+     * "Instructor" -> ROLE_INSTRUCTOR, which makes hasRole('INSTRUCTOR') work.
+     * An invited team member can NEVER get ROLE_ADMIN / ROLE_SUPER_ADMIN, even if their role name is
+     * "Admin" - only the company's own admin (no companyAdminId) and the app owner can.
+     */
+    private static String toAuthority(User user) {
+        String normalized = user.getRole() == null
+                ? ""
+                : user.getRole().trim().toUpperCase(Locale.ROOT).replaceAll("\\s+", "_");
+        boolean teamMember = user.getCompanyAdminId() != null;
+        if (teamMember && ("ADMIN".equals(normalized) || "SUPER_ADMIN".equals(normalized))) {
+            normalized = "TEAM_MEMBER";
+        }
+        return "ROLE_" + normalized;
     }
 
     /** Active user, and company ADMIN-ku Active package + login access irukkanum. */
