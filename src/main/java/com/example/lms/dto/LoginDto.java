@@ -71,5 +71,7 @@ public class LoginDto {
         private boolean companyAdmin;
         /** Grants the user has (package-limited for ADMIN, role-based for everyone else). Empty when fullAccess. */
         private java.util.List<PermissionDto.Grant> permissions;
+        /** Category ids whose left-menu entry is visible (category switch, independent of the CRUD flags). */
+        private java.util.List<String> menus;
     }
 }

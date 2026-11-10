@@ -192,6 +192,45 @@ public class PackageService {
         return result;
     }
 
+    /**
+     * Category ids whose LEFT MENU entry the company's package switches on (the category switch in
+     * Package Management). This is independent of the create / read / update / delete flags of the
+     * features inside the category: "Course Management" ON with every child OFF still shows the menu.
+     * Fails CLOSED: no package / inactive / expired / unreadable -> empty. SUPER_ADMIN -> every category.
+     */
+    @Transactional(readOnly = true)
+    public Set<String> getEnabledMenuCategoryIdsForOwner(Long ownerId) {
+        User owner = ownerId == null ? null : userRepository.findById(ownerId).orElse(null);
+        if (owner == null) {
+            return Set.of();
+        }
+        if ("SUPER_ADMIN".equalsIgnoreCase(owner.getRole())) {
+            return getFeatureCatalog().stream()
+                    .map(PackageDto.FeatureCatalogEntry::getCategoryId)
+                    .collect(Collectors.toSet());
+        }
+        if (owner.getPackageId() == null || owner.isPackageExpired()) {
+            return Set.of();
+        }
+        PackageEntity pkg = packageRepository.findById(owner.getPackageId())
+                .filter(p -> "Active".equalsIgnoreCase(p.getStatus()))
+                .orElse(null);
+        if (pkg == null || pkg.getPermissionsJson() == null || pkg.getPermissionsJson().isBlank()) {
+            return Set.of();
+        }
+        try {
+            List<PackageDto.Category> categories = objectMapper.readValue(pkg.getPermissionsJson(),
+                    new TypeReference<List<PackageDto.Category>>() {});
+            return categories.stream()
+                    .filter(PackageDto.Category::isEnabled)
+                    .map(PackageDto.Category::getId)
+                    .collect(Collectors.toSet());
+        } catch (Exception e) {
+            log.error("Corrupt permissions_json for package id={}", pkg.getId(), e);
+            return Set.of();
+        }
+    }
+
     private static boolean anyOn(PackageDto.Permission p) {
         return p.isCreate() || p.isRead() || p.isUpdate() || p.isDelete();
     }

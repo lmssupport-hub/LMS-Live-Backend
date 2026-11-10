@@ -89,6 +89,7 @@ public class LoginService {
                     .fullAccess(access.isFullAccess())
                     .companyAdmin(access.isCompanyAdmin())
                     .permissions(access.getPermissions())
+                    .menus(access.getMenus())
                     .build();
 
         } catch (ApiException e) {

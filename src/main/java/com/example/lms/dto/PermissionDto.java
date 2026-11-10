@@ -45,6 +45,10 @@ public class PermissionDto {
      *                package ({@link #permissions} = what the package allows).
      * Everyone else (Instructor, Learner, any custom role) gets the role's grants limited
      * to what the company's package allows.
+     *
+     * menus        = category ids (e.g. COURSE_MGMT) whose LEFT MENU entry is shown. This is the
+     *                category-level switch in Package / Role Management and is independent of the
+     *                create / read / update / delete flags in {@link #permissions}.
      */
     @Getter
     @AllArgsConstructor
@@ -52,13 +56,14 @@ public class PermissionDto {
         private final boolean fullAccess;
         private final boolean companyAdmin;
         private final List<Grant> permissions;
+        private final List<String> menus;
 
         public static Snapshot none() {
-            return new Snapshot(false, false, List.of());
+            return new Snapshot(false, false, List.of(), List.of());
         }
 
         public static Snapshot full() {
-            return new Snapshot(true, false, List.of());
+            return new Snapshot(true, false, List.of(), List.of());
         }
 
         public boolean allows(String featureId, String action) {

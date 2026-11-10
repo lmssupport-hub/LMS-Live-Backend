@@ -88,9 +88,10 @@ public class PermissionService {
 
         Long ownerId = PackageService.resolveOwnerId(user);
         List<PermissionDto.Grant> packageGrants = packageGrantsOf(ownerId);
+        List<String> packageMenus = packageMenusOf(ownerId);
 
         if (!teamMember && "ADMIN".equals(role)) {
-            return new PermissionDto.Snapshot(false, true, packageGrants);
+            return new PermissionDto.Snapshot(false, true, packageGrants, packageMenus);
         }
 
         if (user.getRoleId() == null) {
@@ -100,7 +101,9 @@ public class PermissionService {
                 .filter(r -> "Active".equalsIgnoreCase(r.getStatus()))
                 // a role created by another company never applies to this user
                 .filter(r -> ownerId.equals(r.getCreatedByAdminId()))
-                .map(r -> new PermissionDto.Snapshot(false, false, limitToPackage(grantsOf(r), packageGrants)))
+                .map(r -> new PermissionDto.Snapshot(false, false,
+                        limitToPackage(grantsOf(r), packageGrants),
+                        limitMenusToPackage(menusOf(r), packageMenus)))
                 .orElseGet(PermissionDto.Snapshot::none);
     }
 
@@ -126,6 +129,42 @@ public class PermissionService {
             return List.copyOf(grants);
         } catch (Exception e) {
             log.warn("Could not read package permissions for owner id={}; granting nothing.", ownerId, e);
+            return List.of();
+        }
+    }
+
+    /**
+     * Left-menu categories the company's package switches on. Independent of the CRUD flags:
+     * a category can be ON with every action OFF. Empty = no / expired package.
+     */
+    private List<String> packageMenusOf(Long ownerId) {
+        try {
+            return List.copyOf(packageService.getEnabledMenuCategoryIdsForOwner(ownerId));
+        } catch (Exception e) {
+            log.warn("Could not read package menus for owner id={}; showing no menus.", ownerId, e);
+            return List.of();
+        }
+    }
+
+    /** Role menus AND package menus: a menu is shown only if the role switched it on AND the package has it. */
+    private static List<String> limitMenusToPackage(List<String> roleMenus, List<String> packageMenus) {
+        return roleMenus.stream().filter(packageMenus::contains).distinct().toList();
+    }
+
+    /** Categories whose category switch is ON in the role (regardless of the create / read / update / delete flags). */
+    private List<String> menusOf(RoleEntity role) {
+        if (role.getPermissionsJson() == null || role.getPermissionsJson().isBlank()) {
+            return List.of();
+        }
+        try {
+            List<PackageDto.Category> tree = objectMapper.readValue(
+                    role.getPermissionsJson(), new TypeReference<List<PackageDto.Category>>() {});
+            return tree.stream()
+                    .filter(PackageDto.Category::isEnabled)
+                    .map(PackageDto.Category::getId)
+                    .toList();
+        } catch (Exception e) {
+            log.warn("Unreadable permissions on role id={}; showing no menus.", role.getId(), e);
             return List.of();
         }
     }
