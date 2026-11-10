@@ -3,7 +3,9 @@ package com.example.lms.service;
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
 import com.example.lms.dto.CourseDto;
+import com.example.lms.dto.PermissionDto;
 import com.example.lms.entity.CourseEntity;
+import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.CourseRepository;
 import com.example.lms.repository.EnrollmentRepository;
@@ -44,17 +46,20 @@ public class CourseService {
     private final SectionRepository sectionRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final Cloudinary cloudinary;
+    private final PermissionService permissionService;
 
     public CourseService(CourseRepository courseRepository,
                          UserRepository userRepository,
                          SectionRepository sectionRepository,
                          EnrollmentRepository enrollmentRepository,
-                         Cloudinary cloudinary) {
+                         Cloudinary cloudinary,
+                         PermissionService permissionService) {
         this.courseRepository = courseRepository;
         this.userRepository = userRepository;
         this.sectionRepository = sectionRepository;
         this.enrollmentRepository = enrollmentRepository;
         this.cloudinary = cloudinary;
+        this.permissionService = permissionService;
     }
 
     @Transactional
@@ -87,6 +92,36 @@ public class CourseService {
     @Transactional(readOnly = true)
     public List<CourseDto.CourseResponse> getAllCourses() {
         return courseRepository.findAll().stream().map(this::toResponse).toList();
+    }
+
+    /**
+     * What the Course List shows for this user, decided by the role's permissions (not by the role NAME):
+     *  - admin / super admin, or any role that can create, edit, delete or organize courses -> every course
+     *  - a role that only has "read" on Course List -> only the PUBLISHED courses the user is enrolled in
+     *  - no "read" on Course List -> 403
+     */
+    @Transactional(readOnly = true)
+    public List<CourseDto.CourseResponse> getVisibleCourses(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ApiException("User not found.", HttpStatus.UNAUTHORIZED));
+        PermissionDto.Snapshot access = permissionService.snapshotOf(user);
+
+        // Kept from the old behaviour: a user whose role is literally LEARNER never sees the full list.
+        if ("LEARNER".equalsIgnoreCase(user.getRole())) {
+            return getCoursesForLearner(user.getEmail());
+        }
+        boolean manager = access.isFullAccess()
+                || access.allows(PermissionService.COURSE_CREATE, "create")
+                || access.allows(PermissionService.COURSE_CREATE, "update")
+                || access.allows(PermissionService.COURSE_CREATE, "delete")
+                || access.allows(PermissionService.COURSE_ORGANIZE, "update");
+        if (manager) {
+            return getAllCourses();
+        }
+        if (access.allows(PermissionService.COURSE_LIST, "read")) {
+            return getCoursesForLearner(user.getEmail());
+        }
+        throw new ApiException("You do not have permission to view courses.", HttpStatus.FORBIDDEN);
     }
 
     /**

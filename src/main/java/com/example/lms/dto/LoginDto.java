@@ -65,5 +65,9 @@ public class LoginDto {
         private String lastName;
         private String email;
         private String role;
+        /** True for company ADMIN / SUPER_ADMIN: every action is allowed. */
+        private boolean fullAccess;
+        /** Grants of the user's role (empty when fullAccess is true). */
+        private java.util.List<PermissionDto.Grant> permissions;
     }
 }

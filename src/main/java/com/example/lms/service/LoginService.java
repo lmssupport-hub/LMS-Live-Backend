@@ -1,6 +1,7 @@
 package com.example.lms.service;
 
 import com.example.lms.dto.LoginDto;
+import com.example.lms.dto.PermissionDto;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.UserRepository;
@@ -27,6 +28,7 @@ public class LoginService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final PackageService packageService;
+    private final PermissionService permissionService;
 
     @Value("${app.login.max-failed-attempts:5}")
     private int maxFailedAttempts;
@@ -74,6 +76,8 @@ public class LoginService {
             boolean rememberMe = Boolean.TRUE.equals(request.getRememberMe());
             String token = jwtUtil.generateToken(user.getEmail(), user.getId(), user.getRole(), rememberMe);
 
+            PermissionDto.Snapshot access = permissionService.snapshotOf(user);
+
             return LoginDto.LoginResponse.builder()
                     .token(token)
                     .tokenType("Bearer")
@@ -82,6 +86,8 @@ public class LoginService {
                     .lastName(user.getLastName())
                     .email(user.getEmail())
                     .role(user.getRole())
+                    .fullAccess(access.isFullAccess())
+                    .permissions(access.getPermissions())
                     .build();
 
         } catch (ApiException e) {

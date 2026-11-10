@@ -2,7 +2,9 @@ package com.example.lms.controller;
 
 import com.example.lms.config.AuthPrincipal;
 import com.example.lms.dto.ApiResponse;
+import com.example.lms.dto.PermissionDto;
 import com.example.lms.dto.ProfileDto;
+import com.example.lms.service.PermissionService;
 import com.example.lms.service.ProfileService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +36,15 @@ import org.springframework.web.multipart.MultipartFile;
 public class ProfileController {
 
     private final ProfileService profileService;
+    private final PermissionService permissionService;
+
+    /** Current permissions of the logged-in user, so the UI can refresh them without logging in again. */
+    @GetMapping("/permissions")
+    public ResponseEntity<ApiResponse<PermissionDto.Snapshot>> getMyPermissions(
+            @AuthenticationPrincipal AuthPrincipal principal) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Permissions fetched successfully.", permissionService.snapshotFor(principal.getId())));
+    }
 
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<ProfileDto.Response>> getMyProfile(
