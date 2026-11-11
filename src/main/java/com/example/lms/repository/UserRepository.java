@@ -35,4 +35,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     // NEW - used by the Assigned admins list (remaining days).
     List<User> findByPackageId(Long packageId);
+
+    // NEW - Role Management: users of ONE company who hold a given role.
+    List<User> findByRoleIdAndCompanyAdminId(Long roleId, Long companyAdminId);
+
+    long countByRoleIdAndCompanyAdminId(Long roleId, Long companyAdminId);
+
+    /** One query for the whole role list: [roleId, count]. */
+    @Query("SELECT u.roleId, COUNT(u) FROM User u " +
+           "WHERE u.companyAdminId = :ownerId AND u.roleId IS NOT NULL GROUP BY u.roleId")
+    List<Object[]> countUsersByRole(@Param("ownerId") Long ownerId);
 }

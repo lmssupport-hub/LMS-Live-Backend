@@ -2,9 +2,11 @@ package com.example.lms.service;
 
 import com.example.lms.dto.PackageDto;
 import com.example.lms.dto.RoleDto;
+import com.example.lms.entity.InviteEntity;
 import com.example.lms.entity.RoleEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
+import com.example.lms.repository.InviteRepository;
 import com.example.lms.repository.RoleRepository;
 import com.example.lms.repository.UserRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -15,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +36,7 @@ public class RoleService {
 
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
+    private final InviteRepository inviteRepository;
     private final PackageService packageService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -134,19 +138,50 @@ public class RoleService {
         assertWithinPackage(ownerId, request.getPermissions());
 
         mapRequestToEntity(request, name, entity);
-        return saveOrConflict(entity);
+        RoleDto.Response response = saveOrConflict(entity);
+        response.setAssignedUsers(userRepository.countByRoleIdAndCompanyAdminId(id, ownerId));
+        return response;
     }
 
     @Transactional(readOnly = true)
     public RoleDto.Response getRoleById(Long userId, Long id) {
-        return mapEntityToResponse(findOwned(id, ownerOf(userId)));
+        Long ownerId = ownerOf(userId);
+        RoleDto.Response response = mapEntityToResponse(findOwned(id, ownerId));
+        response.setAssignedUsers(userRepository.countByRoleIdAndCompanyAdminId(id, ownerId));
+        return response;
     }
 
     @Transactional(readOnly = true)
     public List<RoleDto.Response> getAllRoles(Long userId) {
-        return roleRepository.findAllByCreatedByAdminId(ownerOf(userId)).stream()
+        Long ownerId = ownerOf(userId);
+        Map<Long, Long> counts = new HashMap<>();
+        for (Object[] row : userRepository.countUsersByRole(ownerId)) {
+            counts.put((Long) row[0], (Long) row[1]);
+        }
+        return roleRepository.findAllByCreatedByAdminId(ownerId).stream()
                 .map(this::mapEntityToResponse)
+                .peek(r -> r.setAssignedUsers(counts.getOrDefault(r.getId(), 0L)))
                 .collect(Collectors.toList());
+    }
+
+    /** "View users" of a role: people who signed up with it, plus invites that are still pending. */
+    @Transactional(readOnly = true)
+    public List<RoleDto.UserSummary> getUsersByRole(Long userId, Long id) {
+        Long ownerId = ownerOf(userId);
+        findOwned(id, ownerId); // 404 if the role is not this company's
+
+        List<RoleDto.UserSummary> out = new ArrayList<>();
+        for (User u : userRepository.findByRoleIdAndCompanyAdminId(id, ownerId)) {
+            out.add(new RoleDto.UserSummary(
+                    u.getId(),
+                    (u.getFirstName() + " " + u.getLastName()).trim(),
+                    u.getEmail(),
+                    Boolean.TRUE.equals(u.getActive()) ? "Active" : "Inactive"));
+        }
+        for (InviteEntity i : inviteRepository.findByRoleIdAndInvitedByAdminIdAndStatus(id, ownerId, "PENDING")) {
+            if (!i.isExpired()) out.add(new RoleDto.UserSummary(null, "-", i.getEmail(), "Invited"));
+        }
+        return out;
     }
 
     @Transactional(readOnly = true)

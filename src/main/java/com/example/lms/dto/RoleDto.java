@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -47,8 +48,21 @@ public class RoleDto {
         private String description;
         private List<Category> permissions;
         private String status;
+        /** Users who accepted an invite for this role (pending invites are not counted). */
+        private long assignedUsers;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
+    }
+
+    /** One row of the "View users" list of a role. */
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class UserSummary {
+        private Long id;        // null for a pending invite
+        private String name;
+        private String email;
+        private String status;  // Active / Inactive / Invited
     }
 
     // Used for the "toggle Active/Inactive" action from the role list screen

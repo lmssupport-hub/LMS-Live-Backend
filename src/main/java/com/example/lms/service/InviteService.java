@@ -48,7 +48,7 @@ public class InviteService {
 
     @Transactional
     public InviteDto.SendResponse sendInvite(Long adminId, InviteDto.SendRequest request) {
-        RoleEntity role = roleRepository.findById(request.getRoleId())
+        RoleEntity role = roleRepository.findByIdAndCreatedByAdminId(request.getRoleId(), adminId)
                 .orElseThrow(() -> new ApiException("Selected role does not exist.", HttpStatus.NOT_FOUND));
 
         String email = request.getEmail().trim().toLowerCase();

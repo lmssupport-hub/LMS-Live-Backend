@@ -62,6 +62,13 @@ public class RoleController {
         return ResponseEntity.ok(roleService.getActiveRoles(principal.getId()));
     }
 
+    /** Users (and pending invites) of one role: the "View users" screen. */
+    @GetMapping("/{id}/users")
+    public ResponseEntity<List<RoleDto.UserSummary>> users(
+            @AuthenticationPrincipal AuthPrincipal principal, @PathVariable Long id) {
+        return ResponseEntity.ok(roleService.getUsersByRole(principal.getId(), id));
+    }
+
     @PatchMapping("/{id}/status")
     public ResponseEntity<RoleDto.Response> updateStatus(
             @AuthenticationPrincipal AuthPrincipal principal,
