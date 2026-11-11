@@ -3,6 +3,7 @@ package com.example.lms.controller;
 import com.example.lms.dto.ApiResponse;
 import com.example.lms.dto.InstructorDto;
 import com.example.lms.repository.UserRepository;
+import com.example.lms.service.CourseAccessService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -15,15 +16,17 @@ import java.util.List;
 public class InstructorController {
 
     private final UserRepository userRepository;
+    private final CourseAccessService courseAccess;
 
-    public InstructorController(UserRepository userRepository) {
+    public InstructorController(UserRepository userRepository, CourseAccessService courseAccess) {
         this.userRepository = userRepository;
+        this.courseAccess = courseAccess;
     }
 
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<InstructorDto>>> getActiveInstructors() {
         List<InstructorDto> instructors = userRepository
-                .findByRoleIgnoreCaseAndActiveTrue("INSTRUCTOR")   // CHANGED
+                .findByRoleIgnoreCaseAndActiveTrueAndCompanyAdminId("INSTRUCTOR", courseAccess.currentOrganizationId())   // CHANGED: own organization only
                 .stream()
                 .map(u -> new InstructorDto(
                         u.getId(),

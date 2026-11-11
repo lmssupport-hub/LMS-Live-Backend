@@ -70,13 +70,16 @@ public class MultimediaService {
     private final MultimediaRepository multimediaRepository;
     private final SectionRepository sectionRepository;
     private final Cloudinary cloudinary;
+    private final CourseAccessService courseAccess;
 
     public MultimediaService(MultimediaRepository multimediaRepository,
                              SectionRepository sectionRepository,
-                             Cloudinary cloudinary) {
+                             Cloudinary cloudinary,
+                             CourseAccessService courseAccess) {
         this.multimediaRepository = multimediaRepository;
         this.sectionRepository = sectionRepository;
         this.cloudinary = cloudinary;
+        this.courseAccess = courseAccess;
     }
 
     private record StoredFile(String url, String publicId, String resourceType) {
@@ -270,19 +273,16 @@ public class MultimediaService {
     // ---------- lookups ----------
 
     private SectionEntity getSectionOrThrow(Long courseId, Long sectionId) {
+        courseAccess.requireCourseInOrganization(courseId);   // NEW: own organization only
         return sectionRepository.findByIdAndCourseId(sectionId, courseId)
                 .orElseThrow(() -> new ApiException(
                         "Section not found with id: " + sectionId + " in course: " + courseId, HttpStatus.NOT_FOUND));
     }
 
-    // Learners only see resources of published courses (SRS: "published or assigned resources").
+    // CHANGED: reading content = own organization AND (manager, or a learner enrolled in the PUBLISHED course).
     private SectionEntity getVisibleSectionOrThrow(Long courseId, Long sectionId) {
-        SectionEntity section = getSectionOrThrow(courseId, sectionId);
-        if (!canManage() && !"PUBLISHED".equalsIgnoreCase(section.getCourse().getStatus())) {
-            throw new ApiException("Section not found with id: " + sectionId + " in course: " + courseId,
-                    HttpStatus.NOT_FOUND);
-        }
-        return section;
+        courseAccess.requireReadableCourse(courseId);
+        return getSectionOrThrow(courseId, sectionId);
     }
 
     private MultimediaEntity getResourceOrThrow(Long sectionId, Long resourceId) {

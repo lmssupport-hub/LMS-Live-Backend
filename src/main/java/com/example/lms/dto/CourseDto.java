@@ -44,5 +44,7 @@ public class CourseDto {
         private String thumbnailUrl;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
+        /** NEW: learner view only - true when the learner is enrolled (Start course), false otherwise (Enroll). Null for managers. */
+        private Boolean enrolled;
     }
 }

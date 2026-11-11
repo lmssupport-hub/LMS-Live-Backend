@@ -78,6 +78,7 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, Lo
             from User u
             where upper(u.role) = 'LEARNER'
               and u.active = true
+              and u.companyAdminId = :organizationId
               and not exists (select 1 from EnrollmentEntity e
                               where e.courseId = :courseId and e.userId = u.id)
               and (:search = ''
@@ -87,6 +88,7 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, Lo
             order by u.firstName asc, u.lastName asc, u.id asc
             """)
     List<EligibleUserRow> findEligibleLearners(@Param("courseId") Long courseId,
+                                               @Param("organizationId") Long organizationId,
                                                @Param("search") String search,
                                                Pageable pageable);
 
@@ -95,12 +97,17 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, Lo
             select count(u) from User u
             where u.id in :userIds
               and u.active = true
+              and u.companyAdminId = :organizationId
               and upper(u.role) = 'LEARNER'
             """)
-    long countEligibleLearners(@Param("userIds") Collection<Long> userIds);
+    long countEligibleLearners(@Param("userIds") Collection<Long> userIds,
+                               @Param("organizationId") Long organizationId);
 
     @Query("select e.userId from EnrollmentEntity e where e.courseId = :courseId and e.userId in :userIds")
     List<Long> findEnrolledUserIds(@Param("courseId") Long courseId, @Param("userIds") Collection<Long> userIds);
+
+    /** NEW: is this user already enrolled in the course (learner self-enroll / content access). */
+    boolean existsByCourseIdAndUserId(Long courseId, Long userId);
 
     // ---------- Unenroll ----------
 

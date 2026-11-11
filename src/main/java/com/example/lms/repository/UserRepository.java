@@ -27,6 +27,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     // equality match was returning an empty list. IgnoreCase fixes that.
     List<User> findByRoleIgnoreCaseAndActiveTrue(String role);
 
+    // NEW - instructors of ONE organization (company admin id) for the course Instructor dropdown.
+    List<User> findByRoleIgnoreCaseAndActiveTrueAndCompanyAdminId(String role, Long companyAdminId);
+
     // NEW - used by PackageExpiryScheduler: every admin whose package duration has ended.
     List<User> findByPackageIdIsNotNullAndPackageExpiresAtLessThanEqual(LocalDateTime now);
 

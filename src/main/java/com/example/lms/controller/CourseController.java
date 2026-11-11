@@ -46,6 +46,15 @@ public class CourseController {
         return ResponseEntity.ok(ApiResponse.success("Courses fetched successfully.", courses));
     }
 
+    /**
+     * NEW: a learner enrolls himself in a PUBLISHED course of his own organization
+     * (the card then switches from "Enroll" to "Start course"). Rules are checked in CourseService.selfEnroll.
+     */
+    @PostMapping("/{courseId}/self-enroll")
+    public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> selfEnroll(@PathVariable Long courseId) {
+        return ResponseEntity.ok(ApiResponse.success("Enrolled successfully.", courseService.selfEnroll(courseId)));
+    }
+
     @GetMapping("/{courseId}")
     public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> getCourseById(@PathVariable Long courseId) {
         return ResponseEntity.ok(ApiResponse.success("Course fetched successfully.", courseService.getCourseById(courseId)));

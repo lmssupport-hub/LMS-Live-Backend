@@ -3,7 +3,6 @@ package com.example.lms.service;
 import com.example.lms.dto.SectionDto;
 import com.example.lms.entity.CourseEntity;
 import com.example.lms.entity.SectionEntity;
-import com.example.lms.repository.CourseRepository;
 import com.example.lms.repository.SectionRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -22,11 +21,11 @@ public class SectionService {
     private static final int MAX_NAME_CHARS = 100;
 
     private final SectionRepository sectionRepository;
-    private final CourseRepository courseRepository;
+    private final CourseAccessService courseAccess;
 
-    public SectionService(SectionRepository sectionRepository, CourseRepository courseRepository) {
+    public SectionService(SectionRepository sectionRepository, CourseAccessService courseAccess) {
         this.sectionRepository = sectionRepository;
-        this.courseRepository = courseRepository;
+        this.courseAccess = courseAccess;
     }
 
     @Transactional
@@ -54,7 +53,7 @@ public class SectionService {
 
     @Transactional(readOnly = true)
     public List<SectionDto.SectionResponse> getAllSections(Long courseId) {
-        getCourseOrThrow(courseId);
+        courseAccess.requireReadableCourse(courseId);
         return sectionRepository.findByCourseIdOrderBySectionOrderAsc(courseId)
                 .stream()
                 .map(this::toResponse)
@@ -63,6 +62,7 @@ public class SectionService {
 
     @Transactional(readOnly = true)
     public SectionDto.SectionResponse getSectionById(Long courseId, Long sectionId) {
+        courseAccess.requireReadableCourse(courseId);
         return toResponse(getSectionOrThrow(courseId, sectionId));
     }
 
@@ -127,12 +127,12 @@ public class SectionService {
     // ---------- helpers ----------
 
     private CourseEntity getCourseOrThrow(Long courseId) {
-        return courseRepository.findById(courseId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "Course not found with id: " + courseId));
+        // CHANGED: only a course of the caller's own organization (404 otherwise).
+        return courseAccess.requireCourseInOrganization(courseId);
     }
 
     private SectionEntity getSectionOrThrow(Long courseId, Long sectionId) {
+        courseAccess.requireCourseInOrganization(courseId);
         return sectionRepository.findByIdAndCourseId(sectionId, courseId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Section not found with id: " + sectionId + " in course: " + courseId));

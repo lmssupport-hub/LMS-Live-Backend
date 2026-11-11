@@ -3,8 +3,9 @@ package com.example.lms.service;
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
 import com.example.lms.dto.CourseDto;
-import com.example.lms.dto.PermissionDto;
 import com.example.lms.entity.CourseEntity;
+import com.example.lms.entity.EnrollmentEntity;
+import com.example.lms.entity.EnrollmentStatus;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.CourseRepository;
@@ -20,6 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -46,20 +49,20 @@ public class CourseService {
     private final SectionRepository sectionRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final Cloudinary cloudinary;
-    private final PermissionService permissionService;
+    private final CourseAccessService courseAccess;
 
     public CourseService(CourseRepository courseRepository,
                          UserRepository userRepository,
                          SectionRepository sectionRepository,
                          EnrollmentRepository enrollmentRepository,
                          Cloudinary cloudinary,
-                         PermissionService permissionService) {
+                         CourseAccessService courseAccess) {
         this.courseRepository = courseRepository;
         this.userRepository = userRepository;
         this.sectionRepository = sectionRepository;
         this.enrollmentRepository = enrollmentRepository;
         this.cloudinary = cloudinary;
-        this.permissionService = permissionService;
+        this.courseAccess = courseAccess;
     }
 
     @Transactional
@@ -68,15 +71,18 @@ public class CourseService {
         Integer categoryId = validateCategory(request.getCategoryId());
         String level = validateLevel(request.getLevel());
         String status = validateStatus(request.getStatus());
-        Long instructorId = validateInstructor(request.getInstructorId());
+        // CHANGED: the course belongs to the creator's organization; instructor + name are checked inside it.
+        Long organizationId = courseAccess.currentOrganizationId();
+        Long instructorId = validateInstructor(request.getInstructorId(), organizationId);
 
-        if (courseRepository.existsByNameIgnoreCase(name)) {
+        if (courseRepository.existsByNameIgnoreCaseAndOrganizationId(name, organizationId)) {
             throw new ApiException("A course with the same name already exists.", HttpStatus.CONFLICT);
         }
 
         String thumbnailUrl = storeThumbnail(thumbnail);
 
         CourseEntity course = CourseEntity.builder()
+                .organizationId(organizationId)
                 .name(name)
                 .description(request.getDescription())
                 .categoryId(categoryId)
@@ -86,69 +92,83 @@ public class CourseService {
                 .thumbnailUrl(thumbnailUrl)
                 .build();
 
-        return toResponse(courseRepository.save(course));
+        return toResponse(courseRepository.save(course), null);
     }
 
-    @Transactional(readOnly = true)
-    public List<CourseDto.CourseResponse> getAllCourses() {
-        return courseRepository.findAll().stream().map(this::toResponse).toList();
+    /** CHANGED: only the courses of ONE organization (was findAll() = every organization). */
+    private List<CourseDto.CourseResponse> getOrganizationCourses(Long organizationId) {
+        return courseRepository.findByOrganizationIdOrderByCreatedAtDesc(organizationId)
+                .stream().map(c -> toResponse(c, null)).toList();
     }
 
     /**
-     * What the Course List shows for this user, decided by the role's permissions (not by the role NAME):
-     *  - admin / super admin, or any role that can create, edit, delete or organize courses -> every course
-     *  - a role that only has "read" on Course List -> only the PUBLISHED courses the user is enrolled in
+     * What the Course List shows for this user. Always limited to the user's own organization.
+     *  - a role that can create, edit, delete or organize courses (and the company admin) -> every course of the organization
+     *  - everyone else with "read" on Course List (and every LEARNER) -> every PUBLISHED course of the organization,
+     *    each flagged enrolled = true ("Start course") or false ("Enroll")
      *  - no "read" on Course List -> 403
      */
     @Transactional(readOnly = true)
     public List<CourseDto.CourseResponse> getVisibleCourses(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ApiException("User not found.", HttpStatus.UNAUTHORIZED));
-        PermissionDto.Snapshot access = permissionService.snapshotOf(user);
-
-        // Kept from the old behaviour: a user whose role is literally LEARNER never sees the full list.
-        if ("LEARNER".equalsIgnoreCase(user.getRole())) {
-            return getCoursesForLearner(user.getEmail());
+        if (!courseAccess.canViewCourseList(user)) {
+            throw new ApiException("You do not have permission to view courses.", HttpStatus.FORBIDDEN);
         }
-        boolean manager = access.isFullAccess()
-                // company admin: sees every course of the company as soon as the package gives Course List "read"
-                || (access.isCompanyAdmin() && access.allows(PermissionService.COURSE_LIST, "read"))
-                || access.allows(PermissionService.COURSE_CREATE, "create")
-                || access.allows(PermissionService.COURSE_CREATE, "update")
-                || access.allows(PermissionService.COURSE_CREATE, "delete")
-                || access.allows(PermissionService.COURSE_ORGANIZE, "update");
-        if (manager) {
-            return getAllCourses();
+        Long organizationId = PackageService.resolveOwnerId(user);
+        if (courseAccess.isManager(user)) {
+            return getOrganizationCourses(organizationId);
         }
-        if (access.allows(PermissionService.COURSE_LIST, "read")) {
-            return getCoursesForLearner(user.getEmail());
-        }
-        throw new ApiException("You do not have permission to view courses.", HttpStatus.FORBIDDEN);
+        return getCoursesForLearner(user, organizationId);
     }
 
     /**
-     * NEW: a learner only sees the PUBLISHED courses they are enrolled in.
-     * {@code username} is the authenticated principal name (the user's email).
+     * CHANGED: a learner sees ALL published courses of his own organization. A course he is enrolled in
+     * is marked enrolled = true; the others are enrolled = false so the card shows "Enroll".
      */
-    @Transactional(readOnly = true)
-    public List<CourseDto.CourseResponse> getCoursesForLearner(String username) {
-        Long userId = userRepository.findByEmailIgnoreCase(username)
-                .map(u -> u.getId())
-                .orElseThrow(() -> new ApiException("User not found.", HttpStatus.NOT_FOUND));
-
-        List<Long> courseIds = enrollmentRepository.findCourseIdsByUserId(userId);
-        if (courseIds.isEmpty()) {
-            return List.of();
-        }
-        return courseRepository.findAllById(courseIds).stream()
-                .filter(c -> "PUBLISHED".equalsIgnoreCase(c.getStatus()))
-                .map(this::toResponse)
+    private List<CourseDto.CourseResponse> getCoursesForLearner(User user, Long organizationId) {
+        Set<Long> enrolledIds = new HashSet<>(enrollmentRepository.findCourseIdsByUserId(user.getId()));
+        return courseRepository
+                .findByOrganizationIdAndStatusIgnoreCaseOrderByCreatedAtDesc(organizationId, "PUBLISHED")
+                .stream()
+                .map(c -> toResponse(c, enrolledIds.contains(c.getId())))
                 .toList();
+    }
+
+    /**
+     * NEW: learner self-enrollment. Only a PUBLISHED course of the caller's own organization can be joined;
+     * enrolling twice is a no-op.
+     */
+    @Transactional
+    public CourseDto.CourseResponse selfEnroll(Long courseId) {
+        User user = courseAccess.currentUser();
+        if (!courseAccess.canViewCourseList(user)) {
+            throw new ApiException("You do not have permission to enroll in courses.", HttpStatus.FORBIDDEN);
+        }
+        CourseEntity course = courseAccess.requireCourseInOrganization(courseId);
+        if (!"PUBLISHED".equalsIgnoreCase(course.getStatus())) {
+            throw new ApiException("Course not found with id: " + courseId, HttpStatus.NOT_FOUND);
+        }
+        if (!enrollmentRepository.existsByCourseIdAndUserId(courseId, user.getId())) {
+            try {
+                enrollmentRepository.saveAndFlush(EnrollmentEntity.builder()
+                        .courseId(courseId)
+                        .userId(user.getId())
+                        .enrolledAt(LocalDateTime.now())
+                        .progressPercent(0)
+                        .status(EnrollmentStatus.NOT_STARTED)
+                        .build());
+            } catch (DataIntegrityViolationException e) {
+                throw new ApiException("You are already enrolled in this course. Please refresh.", HttpStatus.CONFLICT);
+            }
+        }
+        return toResponse(course, true);
     }
 
     @Transactional(readOnly = true)
     public CourseDto.CourseResponse getCourseById(Long courseId) {
-        return toResponse(getCourseOrThrow(courseId));
+        // CHANGED: own organization only; a learner must be enrolled in a published course.
+        return toResponse(courseAccess.requireReadableCourse(courseId), null);
     }
 
     @Transactional
@@ -159,9 +179,9 @@ public class CourseService {
         Integer categoryId = validateCategory(request.getCategoryId());
         String level = validateLevel(request.getLevel());
         String status = validateStatus(request.getStatus());
-        Long instructorId = validateInstructor(request.getInstructorId());
+        Long instructorId = validateInstructor(request.getInstructorId(), course.getOrganizationId());
 
-        if (courseRepository.existsByNameIgnoreCaseAndIdNot(name, courseId)) {
+        if (courseRepository.existsByNameIgnoreCaseAndOrganizationIdAndIdNot(name, course.getOrganizationId(), courseId)) {
             throw new ApiException("A course with the same name already exists.", HttpStatus.CONFLICT);
         }
 
@@ -175,7 +195,7 @@ public class CourseService {
             course.setThumbnailUrl(storeThumbnail(thumbnail));
         }
 
-        return toResponse(courseRepository.save(course));
+        return toResponse(courseRepository.save(course), null);
     }
 
     /**
@@ -212,8 +232,8 @@ public class CourseService {
     // ---------- helpers ----------
 
     private CourseEntity getCourseOrThrow(Long courseId) {
-        return courseRepository.findById(courseId)
-                .orElseThrow(() -> new ApiException("Course not found with id: " + courseId, HttpStatus.NOT_FOUND));
+        // CHANGED: only a course of the caller's own organization is found (404 otherwise).
+        return courseAccess.requireCourseInOrganization(courseId);
     }
 
     private String validateName(String rawName) {
@@ -249,16 +269,17 @@ public class CourseService {
     }
 
     /**
-     * instructorId is validated server-side: it must belong to an active INSTRUCTOR,
-     * the same way category/level/status are validated.
+     * instructorId is validated server-side: it must belong to an active INSTRUCTOR
+     * OF THE SAME ORGANIZATION, the same way category/level/status are validated.
      */
-    private Long validateInstructor(Long instructorId) {
+    private Long validateInstructor(Long instructorId, Long organizationId) {
         if (instructorId == null) {
             throw new ApiException("Instructor selection is required.", HttpStatus.BAD_REQUEST);
         }
         boolean isActiveInstructor = userRepository.findById(instructorId)
                 .filter(u -> "INSTRUCTOR".equalsIgnoreCase(u.getRole()))
                 .filter(u -> Boolean.TRUE.equals(u.getActive()))
+                .filter(u -> organizationId != null && organizationId.equals(PackageService.resolveOwnerId(u)))
                 .isPresent();
         if (!isActiveInstructor) {
             throw new ApiException("Selected instructor is invalid or inactive.", HttpStatus.BAD_REQUEST);
@@ -299,7 +320,7 @@ public class CourseService {
         }
     }
 
-    private CourseDto.CourseResponse toResponse(CourseEntity c) {
+    private CourseDto.CourseResponse toResponse(CourseEntity c, Boolean enrolled) {
         return CourseDto.CourseResponse.builder()
                 .id(c.getId())
                 .name(c.getName())
@@ -313,6 +334,7 @@ public class CourseService {
                 .thumbnailUrl(c.getThumbnailUrl())
                 .createdAt(c.getCreatedAt())
                 .updatedAt(c.getUpdatedAt())
+                .enrolled(enrolled)
                 .build();
     }
 

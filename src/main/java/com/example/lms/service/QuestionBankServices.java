@@ -54,15 +54,18 @@ public class QuestionBankServices {
         private final SectionRepository sectionRepository;
         private final QuestionSectionRepository questionSectionRepository;
         private final QuestionRepository questionRepository;
+        private final CourseAccessService courseAccess;
 
         public QuestionBankService(QuestionBankRepository bankRepository,
                                    SectionRepository sectionRepository,
                                    QuestionSectionRepository questionSectionRepository,
-                                   QuestionRepository questionRepository) {
+                                   QuestionRepository questionRepository,
+                                   CourseAccessService courseAccess) {
             this.bankRepository = bankRepository;
             this.sectionRepository = sectionRepository;
             this.questionSectionRepository = questionSectionRepository;
             this.questionRepository = questionRepository;
+            this.courseAccess = courseAccess;
         }
 
         @Transactional
@@ -118,12 +121,14 @@ public class QuestionBankServices {
 
         /** Verifies the whole chain: course -> organize section -> bank. 404 if any link is wrong. */
         public QuestionBankEntity getBankOrThrow(Long courseId, Long sectionId, Long bankId) {
+            courseAccess.requireCourseInOrganization(courseId);   // NEW: own organization only
             return bankRepository.findByIdAndSectionIdAndSectionCourseId(bankId, sectionId, courseId)
                     .orElseThrow(() -> new ApiException(
                             "Question bank not found with id: " + bankId + " in section: " + sectionId, HttpStatus.NOT_FOUND));
         }
 
         private SectionEntity getOrganizeSectionOrThrow(Long courseId, Long sectionId) {
+            courseAccess.requireCourseInOrganization(courseId);   // NEW: own organization only
             return sectionRepository.findByIdAndCourseId(sectionId, courseId)
                     .orElseThrow(() -> new ApiException(
                             "Section not found with id: " + sectionId + " in course: " + courseId, HttpStatus.NOT_FOUND));

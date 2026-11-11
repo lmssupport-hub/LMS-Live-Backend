@@ -4,7 +4,6 @@ import com.example.lms.dto.EnrollmentDto;
 import com.example.lms.entity.EnrollmentEntity;
 import com.example.lms.entity.EnrollmentStatus;
 import com.example.lms.exception.ApiException;
-import com.example.lms.repository.CourseRepository;
 import com.example.lms.repository.EnrollmentRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -34,7 +33,7 @@ public class EnrollmentService {
     static final int MAX_ELIGIBLE_RESULTS = 100;
 
     private final EnrollmentRepository enrollmentRepository;
-    private final CourseRepository courseRepository;
+    private final CourseAccessService courseAccess;
 
     // ------------------------------------------------------------------
     // Enrolled Course List (M4F2)
@@ -54,7 +53,7 @@ public class EnrollmentService {
         requireCourse(courseId);
         int size = Math.min(Math.max(limit, 1), MAX_ELIGIBLE_RESULTS);
         return enrollmentRepository
-                .findEligibleLearners(courseId, escapeLike(search), PageRequest.of(0, size))
+                .findEligibleLearners(courseId, courseAccess.currentOrganizationId(), escapeLike(search), PageRequest.of(0, size))
                 .stream()
                 .map(r -> EnrollmentDto.EligibleUserResponse.builder()
                         .id(r.getId())
@@ -78,7 +77,7 @@ public class EnrollmentService {
         Set<Long> userIds = normalize(rawUserIds);
 
         // Server-side eligibility: ids must be real, active learners (never trust the client's list).
-        if (enrollmentRepository.countEligibleLearners(userIds) != userIds.size()) {
+        if (enrollmentRepository.countEligibleLearners(userIds, courseAccess.currentOrganizationId()) != userIds.size()) {
             throw new ApiException("One or more selected users are not eligible for enrollment.", HttpStatus.BAD_REQUEST);
         }
 
@@ -144,10 +143,9 @@ public class EnrollmentService {
     // helpers
     // ------------------------------------------------------------------
 
+    /** CHANGED: the course must belong to the caller's organization (404 otherwise). */
     private void requireCourse(Long courseId) {
-        if (courseId == null || !courseRepository.existsById(courseId)) {
-            throw new ApiException("Course not found with id: " + courseId, HttpStatus.NOT_FOUND);
-        }
+        courseAccess.requireCourseInOrganization(courseId);
     }
 
     /** De-duplicates, rejects empty / null / oversized selections. Order is preserved. */
