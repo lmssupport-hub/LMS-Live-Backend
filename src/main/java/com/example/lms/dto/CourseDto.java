@@ -3,6 +3,7 @@ package com.example.lms.dto;
 import jakarta.validation.constraints.*;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public class CourseDto {
@@ -28,6 +29,14 @@ public class CourseDto {
 
         @NotBlank(message = "Course Status is required")
         private String status;      // DRAFT / PUBLISHED / ARCHIVED
+
+        // NEW: Free / Paid toggle + price in USD
+        @NotNull(message = "Please select Free or Paid.")
+        private Boolean paid;
+
+        @DecimalMin(value = "0.0", message = "Price must not be negative.")
+        @Digits(integer = 8, fraction = 2, message = "Price can have at most 2 decimal places.")
+        private BigDecimal price;
     }
 
     @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
@@ -42,9 +51,13 @@ public class CourseDto {
         private String level;
         private String status;
         private String thumbnailUrl;
+        private Boolean paid;
+        private BigDecimal price;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
         /** NEW: learner view only - true when the learner is enrolled (Start course), false otherwise (Enroll). Null for managers. */
         private Boolean enrolled;
+        /** NEW: learner view only - NOT_STARTED / IN_PROGRESS / COMPLETED when enrolled, otherwise null. */
+        private String enrollmentStatus;
     }
 }

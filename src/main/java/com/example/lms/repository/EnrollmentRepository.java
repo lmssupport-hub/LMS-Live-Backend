@@ -109,6 +109,12 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, Lo
     /** NEW: is this user already enrolled in the course (learner self-enroll / content access). */
     boolean existsByCourseIdAndUserId(Long courseId, Long userId);
 
+    /** NEW: the learner's own enrollment in one course (status for the card, self-unenroll). */
+    java.util.Optional<EnrollmentEntity> findByCourseIdAndUserId(Long courseId, Long userId);
+
+    /** NEW: every enrollment of one learner (course list shows Enroll / Start Course / Completed per card). */
+    List<EnrollmentEntity> findByUserId(Long userId);
+
     // ---------- Unenroll ----------
 
     /** Bulk delete in one statement; returns the number of rows actually removed. */

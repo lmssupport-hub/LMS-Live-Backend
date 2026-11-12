@@ -55,6 +55,12 @@ public class CourseController {
         return ResponseEntity.ok(ApiResponse.success("Enrolled successfully.", courseService.selfEnroll(courseId)));
     }
 
+    /** NEW: a learner leaves a course he enrolled in (card switches back to "Enroll"). Rules: CourseService.selfUnenroll. */
+    @DeleteMapping("/{courseId}/self-enroll")
+    public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> selfUnenroll(@PathVariable Long courseId) {
+        return ResponseEntity.ok(ApiResponse.success("Unenrolled successfully.", courseService.selfUnenroll(courseId)));
+    }
+
     @GetMapping("/{courseId}")
     public ResponseEntity<ApiResponse<CourseDto.CourseResponse>> getCourseById(@PathVariable Long courseId) {
         return ResponseEntity.ok(ApiResponse.success("Course fetched successfully.", courseService.getCourseById(courseId)));

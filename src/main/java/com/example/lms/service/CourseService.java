@@ -21,11 +21,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class CourseService {
@@ -71,6 +73,7 @@ public class CourseService {
         Integer categoryId = validateCategory(request.getCategoryId());
         String level = validateLevel(request.getLevel());
         String status = validateStatus(request.getStatus());
+        BigDecimal price = validatePricing(request.getPaid(), request.getPrice());
         // CHANGED: the course belongs to the creator's organization; instructor + name are checked inside it.
         Long organizationId = courseAccess.currentOrganizationId();
         Long instructorId = validateInstructor(request.getInstructorId(), organizationId);
@@ -89,6 +92,8 @@ public class CourseService {
                 .instructorId(instructorId)
                 .level(level)
                 .status(status)
+                .paid(Boolean.TRUE.equals(request.getPaid()))
+                .price(price)
                 .thumbnailUrl(thumbnailUrl)
                 .build();
 
@@ -127,11 +132,13 @@ public class CourseService {
      * is marked enrolled = true; the others are enrolled = false so the card shows "Enroll".
      */
     private List<CourseDto.CourseResponse> getCoursesForLearner(User user, Long organizationId) {
-        Set<Long> enrolledIds = new HashSet<>(enrollmentRepository.findCourseIdsByUserId(user.getId()));
+        // courseId -> enrollment status (NOT_STARTED / IN_PROGRESS / COMPLETED) of this learner
+        Map<Long, String> statusByCourse = enrollmentRepository.findByUserId(user.getId()).stream()
+                .collect(Collectors.toMap(EnrollmentEntity::getCourseId, CourseService::statusName, (a, b) -> a));
         return courseRepository
                 .findByOrganizationIdAndStatusIgnoreCaseOrderByCreatedAtDesc(organizationId, "PUBLISHED")
                 .stream()
-                .map(c -> toResponse(c, enrolledIds.contains(c.getId())))
+                .map(c -> toResponse(c, statusByCourse.containsKey(c.getId()), statusByCourse.get(c.getId())))
                 .toList();
     }
 
@@ -162,7 +169,34 @@ public class CourseService {
                 throw new ApiException("You are already enrolled in this course. Please refresh.", HttpStatus.CONFLICT);
             }
         }
-        return toResponse(course, true);
+        String status = enrollmentRepository.findByCourseIdAndUserId(courseId, user.getId())
+                .map(CourseService::statusName).orElse(EnrollmentStatus.NOT_STARTED.name());
+        return toResponse(course, true, status);
+    }
+
+    /**
+     * NEW: learner leaves a course he enrolled in himself (card goes back from "Start Course" to "Enroll").
+     * A COMPLETED enrollment cannot be removed (it is the learner's completion record).
+     * Not enrolled -> no-op.
+     */
+    @Transactional
+    public CourseDto.CourseResponse selfUnenroll(Long courseId) {
+        User user = courseAccess.currentUser();
+        if (!courseAccess.canViewCourseList(user)) {
+            throw new ApiException("You do not have permission to change enrollments.", HttpStatus.FORBIDDEN);
+        }
+        CourseEntity course = courseAccess.requireCourseInOrganization(courseId);
+        enrollmentRepository.findByCourseIdAndUserId(courseId, user.getId()).ifPresent(enrollment -> {
+            if (enrollment.getStatus() == EnrollmentStatus.COMPLETED) {
+                throw new ApiException("A completed course cannot be unenrolled.", HttpStatus.CONFLICT);
+            }
+            enrollmentRepository.deleteByCourseIdAndUserIdIn(courseId, List.of(user.getId()));
+        });
+        return toResponse(course, false, null);
+    }
+
+    private static String statusName(EnrollmentEntity e) {
+        return e.getStatus() == null ? EnrollmentStatus.NOT_STARTED.name() : e.getStatus().name();
     }
 
     @Transactional(readOnly = true)
@@ -179,6 +213,7 @@ public class CourseService {
         Integer categoryId = validateCategory(request.getCategoryId());
         String level = validateLevel(request.getLevel());
         String status = validateStatus(request.getStatus());
+        BigDecimal price = validatePricing(request.getPaid(), request.getPrice());
         Long instructorId = validateInstructor(request.getInstructorId(), course.getOrganizationId());
 
         if (courseRepository.existsByNameIgnoreCaseAndOrganizationIdAndIdNot(name, course.getOrganizationId(), courseId)) {
@@ -191,6 +226,8 @@ public class CourseService {
         course.setInstructorId(instructorId);
         course.setLevel(level);
         course.setStatus(status);
+        course.setPaid(Boolean.TRUE.equals(request.getPaid()));
+        course.setPrice(price);
         if (thumbnail != null && !thumbnail.isEmpty()) {
             course.setThumbnailUrl(storeThumbnail(thumbnail));
         }
@@ -268,6 +305,15 @@ public class CourseService {
         return status;
     }
 
+    /** NEW: Free -> price is forced to 0. Paid -> price must be greater than 0 (stored with 2 decimals). */
+    private BigDecimal validatePricing(Boolean paid, BigDecimal price) {
+        if (!Boolean.TRUE.equals(paid)) return BigDecimal.ZERO;
+        if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ApiException("Price must be greater than 0 for a paid course.", HttpStatus.BAD_REQUEST);
+        }
+        return price.setScale(2, RoundingMode.HALF_UP);
+    }
+
     /**
      * instructorId is validated server-side: it must belong to an active INSTRUCTOR
      * OF THE SAME ORGANIZATION, the same way category/level/status are validated.
@@ -321,6 +367,10 @@ public class CourseService {
     }
 
     private CourseDto.CourseResponse toResponse(CourseEntity c, Boolean enrolled) {
+        return toResponse(c, enrolled, null);
+    }
+
+    private CourseDto.CourseResponse toResponse(CourseEntity c, Boolean enrolled, String enrollmentStatus) {
         return CourseDto.CourseResponse.builder()
                 .id(c.getId())
                 .name(c.getName())
@@ -331,10 +381,13 @@ public class CourseService {
                 .instructorName(resolveInstructorName(c.getInstructorId()))
                 .level(c.getLevel())
                 .status(c.getStatus())
+                .paid(c.isPaid())
+                .price(c.getPrice())
                 .thumbnailUrl(c.getThumbnailUrl())
                 .createdAt(c.getCreatedAt())
                 .updatedAt(c.getUpdatedAt())
                 .enrolled(enrolled)
+                .enrollmentStatus(enrollmentStatus)
                 .build();
     }
 

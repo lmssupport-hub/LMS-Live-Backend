@@ -3,6 +3,7 @@ package com.example.lms.entity;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
@@ -41,6 +42,17 @@ public class CourseEntity {
 
     @Column(name = "thumbnail_url")
     private String thumbnailUrl;
+
+    // NEW: Free / Paid course. A free course always has price 0.
+    // columnDefinition has a default so ddl-auto=update can add the column to a table that already has rows.
+    @Column(name = "is_paid", nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private boolean paid = false;
+
+    // NEW: price in USD (only meaningful when paid = true).
+    @Column(name = "price", nullable = false, precision = 10, scale = 2, columnDefinition = "numeric(10,2) default 0")
+    @Builder.Default
+    private BigDecimal price = BigDecimal.ZERO;
 
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
