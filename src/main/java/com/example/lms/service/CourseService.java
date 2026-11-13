@@ -9,6 +9,7 @@ import com.example.lms.entity.EnrollmentStatus;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.CourseRepository;
+import com.example.lms.repository.CoursePurchaseRepository;
 import com.example.lms.repository.EnrollmentRepository;
 import com.example.lms.repository.SectionRepository;
 import com.example.lms.repository.UserRepository;
@@ -50,6 +51,7 @@ public class CourseService {
     private final UserRepository userRepository;
     private final SectionRepository sectionRepository;
     private final EnrollmentRepository enrollmentRepository;
+    private final CoursePurchaseRepository coursePurchaseRepository;
     private final Cloudinary cloudinary;
     private final CourseAccessService courseAccess;
 
@@ -57,12 +59,14 @@ public class CourseService {
                          UserRepository userRepository,
                          SectionRepository sectionRepository,
                          EnrollmentRepository enrollmentRepository,
+                         CoursePurchaseRepository coursePurchaseRepository,
                          Cloudinary cloudinary,
                          CourseAccessService courseAccess) {
         this.courseRepository = courseRepository;
         this.userRepository = userRepository;
         this.sectionRepository = sectionRepository;
         this.enrollmentRepository = enrollmentRepository;
+        this.coursePurchaseRepository = coursePurchaseRepository;
         this.cloudinary = cloudinary;
         this.courseAccess = courseAccess;
     }
@@ -157,6 +161,13 @@ public class CourseService {
             throw new ApiException("Course not found with id: " + courseId, HttpStatus.NOT_FOUND);
         }
         if (!enrollmentRepository.existsByCourseIdAndUserId(courseId, user.getId())) {
+            // NEW: a PAID course cannot be joined here. The learner must pay on the Payment page
+            // (POST /api/courses/{id}/purchase), which enrolls after a successful payment.
+            // A learner who already paid for it once (then unenrolled) can re-enroll without paying again.
+            if (course.isPaid() && !coursePurchaseRepository.existsByUserIdAndCourseId(user.getId(), courseId)) {
+                throw new ApiException("This is a paid course. Please complete the payment to enroll.",
+                        HttpStatus.PAYMENT_REQUIRED);
+            }
             try {
                 enrollmentRepository.saveAndFlush(EnrollmentEntity.builder()
                         .courseId(courseId)
