@@ -80,6 +80,10 @@ public class QuizAttemptDto {
         private Long nextSectionId;
         /** When the quiz was finished (SUBMITTED only). */
         private LocalDateTime submittedAt;
+        /** True while NOT_STARTED and the learner has not completed all the content of this section yet. */
+        private boolean locked;
+        /** Why it is locked (shown on the intro page). */
+        private String lockedMessage;
         /** Seconds since the attempt started (frozen once submitted). The timer counts up from here. */
         private long elapsedSeconds;
         /** Only after the attempt is submitted. */

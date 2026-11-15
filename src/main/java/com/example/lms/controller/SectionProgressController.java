@@ -9,7 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * Learner module progress. Access rules (own organization, enrolled learner) are checked in the service;
+ * Learner progress. Access rules (own organization, enrolled learner) are checked in the service;
  * admins / instructors just get tracked = false.
  */
 @RestController
@@ -23,19 +23,20 @@ public class SectionProgressController {
         this.progressService = progressService;
     }
 
-    /** Rings on the Course Preview page. */
+    /** Rings on the Course Preview page + the per-item progress / quiz lock of the content page. */
     @GetMapping("/progress")
     public ResponseEntity<ApiResponse<SectionProgressDto.Response>> getProgress(@PathVariable Long courseId) {
         return ResponseEntity.ok(ApiResponse.success("Progress fetched successfully.", progressService.getProgress(courseId)));
     }
 
-    /** Module opened (IN_PROGRESS) or "Mark as completed" (COMPLETED). */
-    @PostMapping("/sections/{sectionId}/progress")
-    public ResponseEntity<ApiResponse<SectionProgressDto.Response>> update(
+    /** The learner has got `percent` % through one multimedia item (100 = completed). */
+    @PostMapping("/sections/{sectionId}/items/multimedia/{itemId}/progress")
+    public ResponseEntity<ApiResponse<SectionProgressDto.Response>> updateItem(
             @PathVariable Long courseId,
             @PathVariable Long sectionId,
+            @PathVariable Long itemId,
             @Valid @RequestBody SectionProgressDto.UpdateRequest request) {
         return ResponseEntity.ok(ApiResponse.success("Progress saved.",
-                progressService.update(courseId, sectionId, request.getStatus(), request.getPercent())));
+                progressService.updateItem(courseId, sectionId, itemId, request.getPercent())));
     }
 }

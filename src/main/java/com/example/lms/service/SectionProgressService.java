@@ -1,46 +1,49 @@
 package com.example.lms.service;
 
 import com.example.lms.dto.SectionProgressDto;
-import com.example.lms.entity.CourseEntity;
 import com.example.lms.entity.EnrollmentEntity;
 import com.example.lms.entity.EnrollmentStatus;
 import com.example.lms.entity.SectionEntity;
-import com.example.lms.entity.SectionProgressEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.EnrollmentRepository;
-import com.example.lms.repository.SectionProgressRepository;
+import com.example.lms.repository.MultimediaRepository;
 import com.example.lms.repository.SectionRepository;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 /**
- * Per-module progress of a learner (shown as the rings on the Course Preview page) and the
- * roll-up into course_enrollments.progress_percent / status.
+ * Learner progress per course section (shown as rings on Course Preview) and its roll-up into
+ * course_enrollments.progress_percent / status.
+ *
+ * Section percent = average of its items (every multimedia file + the quiz). A multimedia item counts only as far
+ * as the learner really got (100 % = completed); the quiz counts 0 until it is submitted.
  */
 @Service
 public class SectionProgressService {
 
     private final CourseAccessService courseAccess;
     private final SectionRepository sectionRepository;
-    private final SectionProgressRepository progressRepository;
+    private final MultimediaRepository multimediaRepository;
+    private final ContentProgressService contentProgress;
     private final EnrollmentRepository enrollmentRepository;
 
     public SectionProgressService(CourseAccessService courseAccess,
                                   SectionRepository sectionRepository,
-                                  SectionProgressRepository progressRepository,
+                                  MultimediaRepository multimediaRepository,
+                                  ContentProgressService contentProgress,
                                   EnrollmentRepository enrollmentRepository) {
         this.courseAccess = courseAccess;
         this.sectionRepository = sectionRepository;
-        this.progressRepository = progressRepository;
+        this.multimediaRepository = multimediaRepository;
+        this.contentProgress = contentProgress;
         this.enrollmentRepository = enrollmentRepository;
     }
 
@@ -54,88 +57,42 @@ public class SectionProgressService {
         return build(user.getId(), courseId);
     }
 
-    /**
-     * Opening a module -> IN_PROGRESS row. Viewing its content -> percent goes up. "Mark as completed" -> 100 %.
-     * A module's percent only ever goes up, and 100 % = COMPLETED.
-     */
+    /** The learner has reached `percent` % of one multimedia item. Only ever raised; 100 = completed. */
     @Transactional
-    public SectionProgressDto.Response update(Long courseId, Long sectionId, String rawStatus, Integer rawPercent) {
+    public SectionProgressDto.Response updateItem(Long courseId, Long sectionId, Long itemId, Integer percent) {
         User user = courseAccess.currentUser();
         courseAccess.requireReadableCourse(courseId);
-        int requested = requestedPercent(rawStatus, rawPercent);
-
         if (!isTrackedLearner(user, courseId)) {
             return untracked();
         }
-        SectionEntity section = sectionRepository.findByIdAndCourseId(sectionId, courseId)
+        sectionRepository.findByIdAndCourseId(sectionId, courseId)
                 .orElseThrow(() -> new ApiException("Section not found with id: " + sectionId, HttpStatus.NOT_FOUND));
-
-        LocalDateTime now = LocalDateTime.now();
-        SectionProgressEntity row = progressRepository.findByUserIdAndSectionId(user.getId(), section.getId())
-                .orElse(null);
-        if (row == null) {
-            row = new SectionProgressEntity();
-            row.setUserId(user.getId());
-            row.setCourseId(courseId);
-            row.setSectionId(section.getId());
-            row.setStartedAt(now);
-            row.setProgressPercent(0);
-            row.setStatus(SectionProgressEntity.IN_PROGRESS);
-            apply(row, requested, now);
-            try {
-                progressRepository.saveAndFlush(row);
-            } catch (DataIntegrityViolationException e) {
-                // two requests raced (e.g. open + view): re-read and apply on the existing row
-                row = progressRepository.findByUserIdAndSectionId(user.getId(), section.getId())
-                        .orElseThrow(() -> new ApiException("Could not save progress. Please try again.", HttpStatus.CONFLICT));
-                apply(row, requested, now);
-                progressRepository.save(row);
-            }
-        } else {
-            apply(row, requested, now);
-            progressRepository.save(row);
+        if (isSectionLocked(user.getId(), courseId, sectionId)) {
+            throw new ApiException("Complete the previous module first.", HttpStatus.FORBIDDEN);
         }
+        multimediaRepository.findByIdAndSectionId(itemId, sectionId)
+                .orElseThrow(() -> new ApiException("Content not found with id: " + itemId, HttpStatus.NOT_FOUND));
 
+        contentProgress.record(user.getId(), courseId, sectionId, ContentProgressService.MULTIMEDIA, itemId,
+                percent == null ? 0 : percent);
         rollUpEnrollment(user.getId(), courseId);
         return build(user.getId(), courseId);
     }
 
+    /** A module opens only when the previous module (that has content) is completed. */
+    @Transactional(readOnly = true)
+    public boolean isSectionLocked(Long userId, Long courseId, Long sectionId) {
+        return build(userId, courseId).getSections().stream()
+                .anyMatch(s -> s.getSectionId().equals(sectionId) && s.isLocked());
+    }
+
+    /** Called after the quiz is submitted: the quiz item changed, so the course percent / status may change. */
+    @Transactional
+    public void refreshEnrollment(Long userId, Long courseId) {
+        rollUpEnrollment(userId, courseId);
+    }
+
     // ------------------------------------------------------------------
-
-    /** Raises the row's percent (never lowers it) and sets COMPLETED at 100. */
-    private void apply(SectionProgressEntity row, int requested, LocalDateTime now) {
-        int current = percentOf(row);
-        int next = Math.max(current, requested);
-        row.setProgressPercent(next);
-        if (next >= 100) {
-            row.setStatus(SectionProgressEntity.COMPLETED);
-            if (row.getCompletedAt() == null) row.setCompletedAt(now);
-        } else {
-            row.setStatus(SectionProgressEntity.IN_PROGRESS);
-        }
-    }
-
-    /** COMPLETED -> 100, otherwise the sent percent, otherwise 0 (IN_PROGRESS = just opened). Nothing sent -> 400. */
-    private int requestedPercent(String rawStatus, Integer rawPercent) {
-        if ((rawStatus == null || rawStatus.isBlank()) && rawPercent == null) {
-            throw new ApiException("Status or percent is required.", HttpStatus.BAD_REQUEST);
-        }
-        int percent = rawPercent == null ? 0 : Math.max(0, Math.min(100, rawPercent));
-        if (rawStatus != null && !rawStatus.isBlank()) {
-            String s = rawStatus.trim().toUpperCase();
-            if (SectionProgressEntity.COMPLETED.equals(s)) return 100;
-            if (!SectionProgressEntity.IN_PROGRESS.equals(s)) {
-                throw new ApiException("Status must be IN_PROGRESS or COMPLETED.", HttpStatus.BAD_REQUEST);
-            }
-        }
-        return percent;
-    }
-
-    /** Old rows (before percent existed) have status COMPLETED but percent 0 -> treat as 100. */
-    private static int percentOf(SectionProgressEntity row) {
-        if (SectionProgressEntity.COMPLETED.equals(row.getStatus())) return 100;
-        return row.getProgressPercent() == null ? 0 : row.getProgressPercent();
-    }
 
     /** Only a non-manager who is enrolled in the course has progress. Admins / instructors get tracked = false. */
     private boolean isTrackedLearner(User user, Long courseId) {
@@ -144,33 +101,41 @@ public class SectionProgressService {
 
     private SectionProgressDto.Response untracked() {
         return SectionProgressDto.Response.builder()
-                .tracked(false).progressPercent(0).completedCount(0).totalCount(0).sections(List.of())
+                .tracked(false).progressPercent(0).completedCount(0).totalCount(0)
+                .sections(List.of()).items(List.of())
                 .build();
     }
 
     private SectionProgressDto.Response build(Long userId, Long courseId) {
         List<SectionEntity> sections = sectionRepository.findByCourseIdOrderBySectionOrderAsc(courseId);
-        Map<Long, Integer> percentBySection = new HashMap<>();
-        for (SectionProgressEntity p : progressRepository.findByUserIdAndCourseId(userId, courseId)) {
-            percentBySection.put(p.getSectionId(), percentOf(p));
-        }
+        Map<String, Integer> stored = contentProgress.storedPercents(userId, courseId);
+
+        List<SectionProgressDto.Item> sectionViews = new ArrayList<>();
+        List<SectionProgressDto.ItemView> allItems = new ArrayList<>();
+        boolean blocked = false; // an earlier module is not completed -> every later module is locked
+        int counted = 0;      // sections that have something to learn
         int completed = 0;
-        int sum = 0;
-        List<SectionProgressDto.Item> items = new java.util.ArrayList<>();
-        for (SectionEntity s : sections) {
-            Integer pct = percentBySection.get(s.getId());
-            int percent = pct == null ? 0 : pct;
-            String st = pct == null ? "NOT_STARTED"
-                    : percent >= 100 ? SectionProgressEntity.COMPLETED : SectionProgressEntity.IN_PROGRESS;
-            if (percent >= 100) completed++;
-            sum += percent;
-            items.add(SectionProgressDto.Item.builder().sectionId(s.getId()).status(st).percent(percent).build());
+        int sumPercent = 0;
+        for (SectionEntity section : sections) {
+            List<SectionProgressDto.ItemView> items = contentProgress.itemsOfSection(section.getId(), stored);
+            allItems.addAll(items);
+            int percent = 0;
+            if (!items.isEmpty()) {
+                int sum = items.stream().mapToInt(SectionProgressDto.ItemView::getPercent).sum();
+                percent = (int) Math.round(sum / (double) items.size());
+                counted++;
+                sumPercent += percent;
+                if (percent >= 100) completed++;
+            }
+            String status = percent >= 100 ? "COMPLETED" : percent > 0 ? "IN_PROGRESS" : "NOT_STARTED";
+            sectionViews.add(SectionProgressDto.Item.builder()
+                    .sectionId(section.getId()).status(status).percent(percent).locked(blocked).build());
+            if (!items.isEmpty() && percent < 100) blocked = true;
         }
-        int total = sections.size();
-        // course progress = average of the module percents
-        int coursePercent = total == 0 ? 0 : (int) Math.round(sum / (double) total);
+        int coursePercent = counted == 0 ? 0 : (int) Math.round(sumPercent / (double) counted);
         return SectionProgressDto.Response.builder()
-                .tracked(true).progressPercent(coursePercent).completedCount(completed).totalCount(total).sections(items)
+                .tracked(true).progressPercent(coursePercent).completedCount(completed).totalCount(counted)
+                .sections(sectionViews).items(allItems)
                 .build();
     }
 
@@ -183,7 +148,7 @@ public class SectionProgressService {
         SectionProgressDto.Response r = build(userId, courseId);
         enrollment.setProgressPercent(r.getProgressPercent());
         boolean allDone = r.getTotalCount() > 0 && r.getCompletedCount() == r.getTotalCount();
-        boolean anyStarted = r.getSections().stream().anyMatch(i -> !"NOT_STARTED".equals(i.getStatus()));
+        boolean anyStarted = r.getItems().stream().anyMatch(i -> i.getPercent() > 0);
         if (allDone) {
             enrollment.setStatus(EnrollmentStatus.COMPLETED);
             if (enrollment.getCompletedAt() == null) enrollment.setCompletedAt(LocalDateTime.now());

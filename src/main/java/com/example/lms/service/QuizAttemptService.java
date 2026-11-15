@@ -56,6 +56,8 @@ public class QuizAttemptService {
     private int maxAttempts;
 
     private final CourseAccessService courseAccess;
+    private final ContentProgressService contentProgress;
+    private final SectionProgressService sectionProgress;
     private final EnrollmentRepository enrollmentRepository;
     private final SectionRepository sectionRepository;
     private final QuestionBankRepository bankRepository;
@@ -65,6 +67,8 @@ public class QuizAttemptService {
     private final QuizAnswerRepository answerRepository;
 
     public QuizAttemptService(CourseAccessService courseAccess,
+                              ContentProgressService contentProgress,
+                              SectionProgressService sectionProgress,
                               EnrollmentRepository enrollmentRepository,
                               SectionRepository sectionRepository,
                               QuestionBankRepository bankRepository,
@@ -73,6 +77,8 @@ public class QuizAttemptService {
                               QuizAttemptRepository attemptRepository,
                               QuizAnswerRepository answerRepository) {
         this.courseAccess = courseAccess;
+        this.contentProgress = contentProgress;
+        this.sectionProgress = sectionProgress;
         this.enrollmentRepository = enrollmentRepository;
         this.sectionRepository = sectionRepository;
         this.bankRepository = bankRepository;
@@ -139,7 +145,7 @@ public class QuizAttemptService {
         QuestionBankEntity bank = requireBank(courseId, sectionId, bankId);
         QuizAttemptEntity attempt = attemptRepository.findByUserIdAndBankId(user.getId(), bankId).orElse(null);
         if (attempt == null) {
-            return notStarted(courseId, sectionId, bank);
+            return notStarted(user, courseId, sectionId, bank);
         }
         return toResponse(attempt, bank);
     }
@@ -152,6 +158,14 @@ public class QuizAttemptService {
 
         QuizAttemptEntity attempt = attemptRepository.findByUserIdAndBankId(user.getId(), bankId).orElse(null);
         if (attempt == null) {
+            if (sectionProgress.isSectionLocked(user.getId(), courseId, sectionId)) {
+                throw new ApiException("Complete the previous module first.", HttpStatus.FORBIDDEN);
+            }
+            // the quiz opens only after ALL the content of this section is completed
+            List<String> remaining = contentProgress.remainingContent(user.getId(), courseId, sectionId);
+            if (!remaining.isEmpty()) {
+                throw new ApiException(lockedMessage(remaining), HttpStatus.FORBIDDEN);
+            }
             attempt = new QuizAttemptEntity();
             attempt.setUserId(user.getId());
             attempt.setCourseId(courseId);
@@ -363,6 +377,9 @@ public class QuizAttemptService {
         attempt.setStatus(QuizAttemptEntity.SUBMITTED);
         attempt.setSubmittedAt(LocalDateTime.now());
         attemptRepository.save(attempt);
+        // the quiz counts towards the section / course progress only now that it is submitted
+        contentProgress.record(user.getId(), courseId, sectionId, ContentProgressService.QUIZ, bankId, 100);
+        sectionProgress.refreshEnrollment(user.getId(), courseId);
         return toResponse(attempt, bank);
     }
 
@@ -436,9 +453,12 @@ public class QuizAttemptService {
     }
 
     /** Response for a learner who has not pressed "Start Quiz" yet (no questions are sent). */
-    private QuizAttemptDto.AttemptResponse notStarted(Long courseId, Long sectionId, QuestionBankEntity bank) {
+    private QuizAttemptDto.AttemptResponse notStarted(User user, Long courseId, Long sectionId, QuestionBankEntity bank) {
         CourseEntity course = courseAccess.requireReadableCourse(courseId);
+        List<String> remaining = contentProgress.remainingContent(user.getId(), courseId, sectionId);
         return QuizAttemptDto.AttemptResponse.builder()
+                .locked(!remaining.isEmpty())
+                .lockedMessage(remaining.isEmpty() ? null : lockedMessage(remaining))
                 .bankName(bank.getName())
                 .courseName(course.getName())
                 .thumbnailUrl(course.getThumbnailUrl())
@@ -449,6 +469,10 @@ public class QuizAttemptService {
                 .elapsedSeconds(0)
                 .sections(List.of())
                 .build();
+    }
+
+    private String lockedMessage(List<String> remaining) {
+        return "Complete all the content of this section first (" + remaining.size() + " left) to unlock the quiz.";
     }
 
     private Long nextSectionId(Long courseId, Long sectionId) {
