@@ -6,6 +6,7 @@ import com.example.lms.entity.MultimediaEntity;
 import com.example.lms.entity.QuestionBankEntities.QuestionBankEntity;
 import com.example.lms.entity.QuestionBankEntities.QuestionSectionEntity;
 import com.example.lms.repository.ContentProgressRepository;
+import com.example.lms.repository.EbookRepository;
 import com.example.lms.repository.MultimediaRepository;
 import com.example.lms.repository.QuestionBankRepository;
 import com.example.lms.repository.QuestionRepository;
@@ -31,20 +32,24 @@ import java.util.Map;
 @Service
 public class ContentProgressService {
 
+    public static final String EBOOK = "EBOOK";
     public static final String MULTIMEDIA = "MULTIMEDIA";
     public static final String QUIZ = "QUIZ";
 
+    private final EbookRepository ebookRepository;
     private final MultimediaRepository multimediaRepository;
     private final QuestionBankRepository bankRepository;
     private final QuestionSectionRepository questionSectionRepository;
     private final QuestionRepository questionRepository;
     private final ContentProgressRepository progressRepository;
 
-    public ContentProgressService(MultimediaRepository multimediaRepository,
+    public ContentProgressService(EbookRepository ebookRepository,
+                                  MultimediaRepository multimediaRepository,
                                   QuestionBankRepository bankRepository,
                                   QuestionSectionRepository questionSectionRepository,
                                   QuestionRepository questionRepository,
                                   ContentProgressRepository progressRepository) {
+        this.ebookRepository = ebookRepository;
         this.multimediaRepository = multimediaRepository;
         this.bankRepository = bankRepository;
         this.questionSectionRepository = questionSectionRepository;
@@ -70,6 +75,11 @@ public class ContentProgressService {
     @Transactional(readOnly = true)
     public List<SectionProgressDto.ItemView> itemsOfSection(Long sectionId, Map<String, Integer> stored) {
         List<SectionProgressDto.ItemView> items = new ArrayList<>();
+        for (EbookRepository.EbookSummary e : ebookRepository.findSummariesBySectionIdOrderByCreatedAtAsc(sectionId)) {
+            items.add(SectionProgressDto.ItemView.builder()
+                    .sectionId(sectionId).itemType(EBOOK).itemId(e.getId()).name(e.getName())
+                    .percent(stored.getOrDefault(key(EBOOK, e.getId()), 0)).build());
+        }
         for (MultimediaEntity m : multimediaRepository.findBySectionIdOrderByCreatedAtAsc(sectionId)) {
             items.add(SectionProgressDto.ItemView.builder()
                     .sectionId(sectionId).itemType(MULTIMEDIA).itemId(m.getId()).name(m.getName())
@@ -89,6 +99,9 @@ public class ContentProgressService {
     public List<String> remainingContent(Long userId, Long courseId, Long sectionId) {
         Map<String, Integer> stored = storedPercents(userId, courseId);
         List<String> remaining = new ArrayList<>();
+        for (EbookRepository.EbookSummary e : ebookRepository.findSummariesBySectionIdOrderByCreatedAtAsc(sectionId)) {
+            if (stored.getOrDefault(key(EBOOK, e.getId()), 0) < 100) remaining.add(e.getName());
+        }
         for (MultimediaEntity m : multimediaRepository.findBySectionIdOrderByCreatedAtAsc(sectionId)) {
             if (stored.getOrDefault(key(MULTIMEDIA, m.getId()), 0) < 100) remaining.add(m.getName());
         }

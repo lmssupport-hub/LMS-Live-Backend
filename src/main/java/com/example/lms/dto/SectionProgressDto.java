@@ -12,7 +12,7 @@ import java.util.List;
 
 public class SectionProgressDto {
 
-    /** Body of POST /api/courses/{courseId}/sections/{sectionId}/items/multimedia/{itemId}/progress. */
+    /** Body of POST /api/courses/{courseId}/sections/{sectionId}/items/{multimedia|ebook}/{itemId}/progress. */
     @Data
     @NoArgsConstructor
     public static class UpdateRequest {
@@ -45,7 +45,7 @@ public class SectionProgressDto {
     @AllArgsConstructor
     public static class ItemView {
         private Long sectionId;
-        /** MULTIMEDIA | QUIZ */
+        /** EBOOK | MULTIMEDIA | QUIZ */
         private String itemType;
         private Long itemId;
         private String name;

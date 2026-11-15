@@ -6,6 +6,7 @@ import com.example.lms.entity.EnrollmentStatus;
 import com.example.lms.entity.SectionEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
+import com.example.lms.repository.EbookRepository;
 import com.example.lms.repository.EnrollmentRepository;
 import com.example.lms.repository.MultimediaRepository;
 import com.example.lms.repository.SectionRepository;
@@ -32,17 +33,20 @@ public class SectionProgressService {
     private final CourseAccessService courseAccess;
     private final SectionRepository sectionRepository;
     private final MultimediaRepository multimediaRepository;
+    private final EbookRepository ebookRepository;
     private final ContentProgressService contentProgress;
     private final EnrollmentRepository enrollmentRepository;
 
     public SectionProgressService(CourseAccessService courseAccess,
                                   SectionRepository sectionRepository,
                                   MultimediaRepository multimediaRepository,
+                                  EbookRepository ebookRepository,
                                   ContentProgressService contentProgress,
                                   EnrollmentRepository enrollmentRepository) {
         this.courseAccess = courseAccess;
         this.sectionRepository = sectionRepository;
         this.multimediaRepository = multimediaRepository;
+        this.ebookRepository = ebookRepository;
         this.contentProgress = contentProgress;
         this.enrollmentRepository = enrollmentRepository;
     }
@@ -57,9 +61,9 @@ public class SectionProgressService {
         return build(user.getId(), courseId);
     }
 
-    /** The learner has reached `percent` % of one multimedia item. Only ever raised; 100 = completed. */
+    /** The learner has reached `percent` % of one content item (MULTIMEDIA or EBOOK). Only ever raised; 100 = completed. */
     @Transactional
-    public SectionProgressDto.Response updateItem(Long courseId, Long sectionId, Long itemId, Integer percent) {
+    public SectionProgressDto.Response updateItem(Long courseId, Long sectionId, String itemType, Long itemId, Integer percent) {
         User user = courseAccess.currentUser();
         courseAccess.requireReadableCourse(courseId);
         if (!isTrackedLearner(user, courseId)) {
@@ -70,11 +74,14 @@ public class SectionProgressService {
         if (isSectionLocked(user.getId(), courseId, sectionId)) {
             throw new ApiException("Complete the previous module first.", HttpStatus.FORBIDDEN);
         }
-        multimediaRepository.findByIdAndSectionId(itemId, sectionId)
-                .orElseThrow(() -> new ApiException("Content not found with id: " + itemId, HttpStatus.NOT_FOUND));
+        boolean exists = ContentProgressService.EBOOK.equals(itemType)
+                ? ebookRepository.existsByIdAndSectionId(itemId, sectionId)
+                : multimediaRepository.findByIdAndSectionId(itemId, sectionId).isPresent();
+        if (!exists) {
+            throw new ApiException("Content not found with id: " + itemId, HttpStatus.NOT_FOUND);
+        }
 
-        contentProgress.record(user.getId(), courseId, sectionId, ContentProgressService.MULTIMEDIA, itemId,
-                percent == null ? 0 : percent);
+        contentProgress.record(user.getId(), courseId, sectionId, itemType, itemId, percent == null ? 0 : percent);
         rollUpEnrollment(user.getId(), courseId);
         return build(user.getId(), courseId);
     }

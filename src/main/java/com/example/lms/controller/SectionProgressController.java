@@ -2,6 +2,7 @@ package com.example.lms.controller;
 
 import com.example.lms.dto.ApiResponse;
 import com.example.lms.dto.SectionProgressDto;
+import com.example.lms.service.ContentProgressService;
 import com.example.lms.service.SectionProgressService;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
@@ -31,12 +32,23 @@ public class SectionProgressController {
 
     /** The learner has got `percent` % through one multimedia item (100 = completed). */
     @PostMapping("/sections/{sectionId}/items/multimedia/{itemId}/progress")
-    public ResponseEntity<ApiResponse<SectionProgressDto.Response>> updateItem(
+    public ResponseEntity<ApiResponse<SectionProgressDto.Response>> updateMultimedia(
             @PathVariable Long courseId,
             @PathVariable Long sectionId,
             @PathVariable Long itemId,
             @Valid @RequestBody SectionProgressDto.UpdateRequest request) {
         return ResponseEntity.ok(ApiResponse.success("Progress saved.",
-                progressService.updateItem(courseId, sectionId, itemId, request.getPercent())));
+                progressService.updateItem(courseId, sectionId, ContentProgressService.MULTIMEDIA, itemId, request.getPercent())));
+    }
+
+    /** The learner has read `percent` % of one ebook (100 = read to the end). */
+    @PostMapping("/sections/{sectionId}/items/ebook/{itemId}/progress")
+    public ResponseEntity<ApiResponse<SectionProgressDto.Response>> updateEbook(
+            @PathVariable Long courseId,
+            @PathVariable Long sectionId,
+            @PathVariable Long itemId,
+            @Valid @RequestBody SectionProgressDto.UpdateRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Progress saved.",
+                progressService.updateItem(courseId, sectionId, ContentProgressService.EBOOK, itemId, request.getPercent())));
     }
 }
