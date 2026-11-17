@@ -68,6 +68,17 @@ public class User {
     @Column(name = "locked_until")
     private LocalDateTime lockedUntil;
 
+    // Dashboard "Online Users": true after login, false after logout (POST /api/auth/logout).
+    // columnDefinition has a default so ddl-auto=update can add the column to a table that already has rows.
+    @Column(name = "online", nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private Boolean online = false;
+
+    // Last login / heartbeat (POST /api/auth/heartbeat every ~45 s). online = true with no heartbeat for
+    // 2 minutes (browser closed without logout) no longer counts as online.
+    @Column(name = "last_seen_at")
+    private LocalDateTime lastSeenAt;
+
     // NEW - set only for team members created via an invite (InviteEntity /
     // InviteService). Points at the ADMIN who invited them. This is how
     // multi-company scoping works: an admin's team = every User whose

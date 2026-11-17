@@ -2,8 +2,10 @@ package com.example.lms.service;
 
 import com.example.lms.dto.LoginDto;
 import com.example.lms.dto.PermissionDto;
+import com.example.lms.entity.LoginEventEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
+import com.example.lms.repository.LoginEventRepository;
 import com.example.lms.repository.UserRepository;
 import com.example.lms.util.JwtUtil;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +31,7 @@ public class LoginService {
     private final JwtUtil jwtUtil;
     private final PackageService packageService;
     private final PermissionService permissionService;
+    private final LoginEventRepository loginEventRepository;
 
     @Value("${app.login.max-failed-attempts:5}")
     private int maxFailedAttempts;
@@ -72,6 +75,7 @@ public class LoginService {
             }
 
             resetFailedAttempts(user);
+            recordLoginEvent(user);
 
             boolean rememberMe = Boolean.TRUE.equals(request.getRememberMe());
             String token = jwtUtil.generateToken(user.getEmail(), user.getId(), user.getRole(), rememberMe);
@@ -98,6 +102,33 @@ public class LoginService {
             throw new ApiException("Unable to log in. Please try again later.",
                     HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /** Dashboard statistics only - a failure here must never block a valid login. */
+    private void recordLoginEvent(User user) {
+        try {
+            loginEventRepository.save(new LoginEventEntity(user.getId(), PackageService.resolveOwnerId(user)));
+            user.setOnline(true);
+            user.setLastSeenAt(LocalDateTime.now());
+            userRepository.save(user);
+        } catch (RuntimeException ignored) {
+            // statistics are best-effort
+        }
+    }
+
+    /** POST /api/auth/heartbeat - the browser is still open; counted as online for the next 2 minutes. */
+    @Transactional
+    public void heartbeat(Long userId) {
+        userRepository.touchLastSeen(userId, LocalDateTime.now());
+    }
+
+    /** POST /api/auth/logout - the user is no longer "online" on the dashboard. */
+    @Transactional
+    public void logout(Long userId) {
+        userRepository.findById(userId).ifPresent(user -> {
+            user.setOnline(false);
+            userRepository.save(user);
+        });
     }
 
     private void registerFailedAttempt(User user) {

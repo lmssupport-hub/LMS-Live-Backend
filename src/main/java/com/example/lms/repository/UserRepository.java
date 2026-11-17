@@ -4,6 +4,7 @@ import com.example.lms.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -40,6 +41,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByRoleIdAndCompanyAdminId(Long roleId, Long companyAdminId);
 
     long countByRoleIdAndCompanyAdminId(Long roleId, Long companyAdminId);
+
+    /**
+     * Heartbeat: refreshes last_seen_at of a user who is online. One bulk UPDATE (no entity load); it never
+     * flips online back to true, so a heartbeat that is still in flight cannot undo a logout.
+     */
+    @Modifying
+    @Query("UPDATE User u SET u.lastSeenAt = :now WHERE u.id = :id AND u.online = true")
+    int touchLastSeen(@Param("id") Long id, @Param("now") LocalDateTime now);
 
     /** One query for the whole role list: [roleId, count]. */
     @Query("SELECT u.roleId, COUNT(u) FROM User u " +
