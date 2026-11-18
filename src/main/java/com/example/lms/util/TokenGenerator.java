@@ -20,6 +20,11 @@ public final class TokenGenerator {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
+    /** Uniformly random 6-digit numeric OTP (leading zeros kept), from a CSPRNG. */
+    public static String generateOtp() {
+        return String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
+    }
+
     public static String hash(String rawToken) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

@@ -73,5 +73,18 @@ public class LoginDto {
         private java.util.List<PermissionDto.Grant> permissions;
         /** Category ids whose left-menu entry is visible (category switch, independent of the CRUD flags). */
         private java.util.List<String> menus;
+
+        /**
+         * True when the password was correct but the account has 2FA on. In that case NO token / permissions
+         * are returned: the browser must call POST /api/auth/2fa/login/verify with {@code challengeToken} + OTP.
+         */
+        private boolean twoFactorRequired;
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        private String challengeToken;
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        private String maskedEmail;
+        /** "EMAIL" or "AUTHENTICATOR" - tells the login screen which code to ask for. */
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        private String twoFactorMethod;
     }
 }

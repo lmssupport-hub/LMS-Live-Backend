@@ -127,6 +127,35 @@ public class ResendEmailService implements PasswordResetEmailService {
         }
     }
 
+    // NEW - 2FA one-time code (login / enable / disable). Same webClient/retry/timeout plumbing as above.
+    // The OTP is never logged - only the masked recipient.
+    @Override
+    public void sendOtpEmail(String toEmail, String otp, String actionLabel, int expiryMinutes) {
+        Map<String, Object> payload = Map.of(
+                "from", fromName + " <" + fromEmail + ">",
+                "to", new String[]{toEmail},
+                "subject", "Your LMS verification code",
+                "html", buildOtpHtml(otp, actionLabel, expiryMinutes)
+        );
+
+        try {
+            webClient.post()
+                    .uri("")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .bodyValue(payload)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .retryWhen(Retry.backoff(maxRetries, Duration.ofMillis(300))
+                            .filter(this::isRetryable))
+                    .block(Duration.ofMillis(timeoutMs * (maxRetries + 1)));
+        } catch (Exception e) {
+            log.error("Resend OTP email dispatch failed for {}: {}", maskEmail(toEmail), e.getMessage());
+            throw new ApiException("Unable to send the verification code. Please try again later.",
+                    HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
     private boolean isRetryable(Throwable throwable) {
         if (throwable instanceof WebClientRequestException) {
             return true;
@@ -172,6 +201,16 @@ public class ResendEmailService implements PasswordResetEmailService {
                 + "<p>Or copy and paste this link into your browser:<br>" + signupLink + "</p>"
                 + "<p>This link expires in " + expiryHours + " hours. "
                 + "If you weren't expecting this, you can ignore this email.</p>"
+                + "</div>";
+    }
+
+    private String buildOtpHtml(String otp, String actionLabel, int expiryMinutes) {
+        return "<div style=\"font-family:sans-serif\">"
+                + "<h2>Your verification code</h2>"
+                + "<p>Use this code to " + actionLabel + ":</p>"
+                + "<p style=\"font-size:28px;font-weight:700;letter-spacing:8px;margin:16px 0\">" + otp + "</p>"
+                + "<p>This code expires in " + expiryMinutes + " minutes. "
+                + "If you did not request it, someone may know your password - please change it.</p>"
                 + "</div>";
     }
 }

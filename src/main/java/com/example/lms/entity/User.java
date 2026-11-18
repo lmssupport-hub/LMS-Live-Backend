@@ -94,6 +94,24 @@ public class User {
     @Column(name = "role_id")
     private Long roleId;
 
+    // 2FA (Profile > Settings > 2FA Verification Method). Only EMAIL is supported for now.
+    // columnDefinition has a default so ddl-auto=update can add the columns to a table that already has rows.
+    @Column(name = "two_fa_enabled", nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private Boolean twoFaEnabled = false;
+
+    /** "EMAIL" or "AUTHENTICATOR"; null while 2FA is off. */
+    @Column(name = "two_fa_method", length = 20)
+    private String twoFaMethod;
+
+    /** AES-GCM encrypted Base32 TOTP secret (AUTHENTICATOR only) - see SecretCipher. */
+    @Column(name = "two_fa_secret", length = 255)
+    private String twoFaSecret;
+
+    /** Last accepted TOTP time step - a code from this step or earlier is rejected (replay protection). */
+    @Column(name = "two_fa_last_step")
+    private Long twoFaLastStep;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -110,6 +128,9 @@ public class User {
         if (this.failedLoginAttempts == null) {
             this.failedLoginAttempts = 0;
         }
+        if (this.twoFaEnabled == null) {
+            this.twoFaEnabled = false;
+        }
     }
 
     @PreUpdate
@@ -120,6 +141,11 @@ public class User {
     @Transient
     public boolean isLocked() {
         return lockedUntil != null && LocalDateTime.now().isBefore(lockedUntil);
+    }
+
+    @Transient
+    public boolean isTwoFaActive() {
+        return Boolean.TRUE.equals(twoFaEnabled);
     }
 
     @Transient

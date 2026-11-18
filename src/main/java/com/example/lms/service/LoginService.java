@@ -2,6 +2,7 @@ package com.example.lms.service;
 
 import com.example.lms.dto.LoginDto;
 import com.example.lms.dto.PermissionDto;
+import com.example.lms.dto.TwoFactorDto;
 import com.example.lms.entity.LoginEventEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
@@ -32,6 +33,7 @@ public class LoginService {
     private final PackageService packageService;
     private final PermissionService permissionService;
     private final LoginEventRepository loginEventRepository;
+    private final TwoFactorService twoFactorService;
 
     @Value("${app.login.max-failed-attempts:5}")
     private int maxFailedAttempts;
@@ -59,42 +61,24 @@ public class LoginService {
                 throw new ApiException("Invalid Email ID or Password.", HttpStatus.UNAUTHORIZED);
             }
 
-            if (!Boolean.TRUE.equals(user.getActive())) {
-                throw new ApiException("Your account is inactive. Please contact support.", HttpStatus.FORBIDDEN);
-            }
-
-            // Package gate: runs only after the password is verified, so it
-            // never leaks package state to someone who doesn't know the password.
-            if (PackageService.isPackageGatedAdmin(user)) {
-                if (user.getPackageId() == null) {
-                    throw new ApiException(NO_PACKAGE_MESSAGE, HttpStatus.FORBIDDEN);
-                }
-                if (!packageService.hasLoginAccess(user.getPackageId())) {
-                    throw new ApiException(LOGIN_ACCESS_DENIED_MESSAGE, HttpStatus.FORBIDDEN);
-                }
-            }
+            assertAccountUsable(user);
 
             resetFailedAttempts(user);
-            recordLoginEvent(user);
 
             boolean rememberMe = Boolean.TRUE.equals(request.getRememberMe());
-            String token = jwtUtil.generateToken(user.getEmail(), user.getId(), user.getRole(), rememberMe);
 
-            PermissionDto.Snapshot access = permissionService.snapshotOf(user);
+            // 2FA on: do NOT issue a JWT yet. E-mail an OTP and return only an opaque challenge token.
+            if (user.isTwoFaActive()) {
+                TwoFactorService.IssuedChallenge challenge = twoFactorService.issueLoginChallenge(user, rememberMe);
+                return LoginDto.LoginResponse.builder()
+                        .twoFactorRequired(true)
+                        .challengeToken(challenge.challengeToken())
+                        .maskedEmail(challenge.maskedEmail())
+                        .twoFactorMethod(challenge.method())
+                        .build();
+            }
 
-            return LoginDto.LoginResponse.builder()
-                    .token(token)
-                    .tokenType("Bearer")
-                    .userId(user.getId())
-                    .firstName(user.getFirstName())
-                    .lastName(user.getLastName())
-                    .email(user.getEmail())
-                    .role(user.getRole())
-                    .fullAccess(access.isFullAccess())
-                    .companyAdmin(access.isCompanyAdmin())
-                    .permissions(access.getPermissions())
-                    .menus(access.getMenus())
-                    .build();
+            return completeLogin(user, rememberMe);
 
         } catch (ApiException e) {
             throw e;
@@ -102,6 +86,73 @@ public class LoginService {
             throw new ApiException("Unable to log in. Please try again later.",
                     HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /** POST /api/auth/2fa/login/verify - second step of login when 2FA is on. */
+    @Transactional(noRollbackFor = ApiException.class)
+    public LoginDto.LoginResponse verifyTwoFactorLogin(TwoFactorDto.LoginVerifyRequest request) {
+        try {
+            TwoFactorService.VerifiedLogin verified =
+                    twoFactorService.verifyLoginChallenge(request.getChallengeToken(), request.getOtp());
+
+            User user = userRepository.findById(verified.userId())
+                    .orElseThrow(() -> new ApiException(
+                            "Your login session has expired. Please log in again.", HttpStatus.GONE));
+
+            // State may have changed since the password step (deactivated, package removed...).
+            assertAccountUsable(user);
+            return completeLogin(user, verified.rememberMe());
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException("Unable to log in. Please try again later.",
+                    HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /** POST /api/auth/2fa/login/resend */
+    public void resendTwoFactorLoginOtp(TwoFactorDto.LoginResendRequest request) {
+        twoFactorService.resendLoginChallenge(request.getChallengeToken());
+    }
+
+    /** Active user + (for package-gated admins) a package that still allows login. */
+    private void assertAccountUsable(User user) {
+        if (!Boolean.TRUE.equals(user.getActive())) {
+            throw new ApiException("Your account is inactive. Please contact support.", HttpStatus.FORBIDDEN);
+        }
+
+        // Package gate: runs only after the password is verified, so it
+        // never leaks package state to someone who doesn't know the password.
+        if (PackageService.isPackageGatedAdmin(user)) {
+            if (user.getPackageId() == null) {
+                throw new ApiException(NO_PACKAGE_MESSAGE, HttpStatus.FORBIDDEN);
+            }
+            if (!packageService.hasLoginAccess(user.getPackageId())) {
+                throw new ApiException(LOGIN_ACCESS_DENIED_MESSAGE, HttpStatus.FORBIDDEN);
+            }
+        }
+    }
+
+    /** Issues the JWT + permission snapshot. Reached only after the password (and OTP, if 2FA is on) passed. */
+    private LoginDto.LoginResponse completeLogin(User user, boolean rememberMe) {
+        recordLoginEvent(user);
+
+        String token = jwtUtil.generateToken(user.getEmail(), user.getId(), user.getRole(), rememberMe);
+        PermissionDto.Snapshot access = permissionService.snapshotOf(user);
+
+        return LoginDto.LoginResponse.builder()
+                .token(token)
+                .tokenType("Bearer")
+                .userId(user.getId())
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .email(user.getEmail())
+                .role(user.getRole())
+                .fullAccess(access.isFullAccess())
+                .companyAdmin(access.isCompanyAdmin())
+                .permissions(access.getPermissions())
+                .menus(access.getMenus())
+                .build();
     }
 
     /** Dashboard statistics only - a failure here must never block a valid login. */

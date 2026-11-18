@@ -36,7 +36,8 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         // Only throttle the unauthenticated auth endpoints where abuse is possible.
         return !(path.startsWith("/api/auth/login")
                 || path.startsWith("/api/auth/signup")
-                || path.startsWith("/api/auth/forgot-password"));
+                || path.startsWith("/api/auth/forgot-password")
+                || path.startsWith("/api/auth/2fa"));
     }
 
     @Override
