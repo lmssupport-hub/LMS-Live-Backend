@@ -54,6 +54,8 @@ public class PermissionService {
     public static final String CONTENT_EBOOK = "CONTENT_MGMT_EBOOK";
     public static final String ENROLL_UNENROLL = "ENROLLMENT_ENROLL_UNENROLL";
     public static final String ENROLLED_LIST = "ENROLLMENT_ENROLLED_LIST";
+    public static final String USER_ALL = "USER_MGMT_ALL_USERS";
+    public static final String CERTIFICATE_TEMPLATE = "CERTIFICATE_MGMT_TEMPLATE";
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;

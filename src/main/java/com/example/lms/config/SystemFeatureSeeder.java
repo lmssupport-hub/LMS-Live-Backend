@@ -27,6 +27,12 @@ public class SystemFeatureSeeder implements ApplicationRunner {
 
         seed("ENROLLMENT_ENROLL_UNENROLL", "ENROLLMENT", "Enrollment", "Enroll/Unroll in Course", 40);
         seed("ENROLLMENT_ENROLLED_LIST", "ENROLLMENT", "Enrollment", "Enrolled Course List", 41);
+
+        // read = open the page / list, update = edit profile + change status, delete = delete users
+        seed("USER_MGMT_ALL_USERS", "USER_MGMT", "User Management", "All Users", 50);
+
+        // read = open the designer, update = save the template
+        seed("CERTIFICATE_MGMT_TEMPLATE", "CERTIFICATE_MGMT", "Certificate Designer", "Certificate Designer", 60);
     }
 
     private void seed(String id, String categoryId, String categoryName, String name, int displayOrder) {

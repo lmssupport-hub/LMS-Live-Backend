@@ -117,8 +117,13 @@ public class LoginService {
 
     /** Active user + (for package-gated admins) a package that still allows login. */
     private void assertAccountUsable(User user) {
-        if (!Boolean.TRUE.equals(user.getActive())) {
+        if (!Boolean.TRUE.equals(user.getActive()) || user.isDeleted()) {
             throw new ApiException("Your account is inactive. Please contact support.", HttpStatus.FORBIDDEN);
+        }
+        if (user.isSuspendedOn(java.time.LocalDate.now())) {
+            throw new ApiException(
+                    "Your account is suspended until " + user.getSuspendedTo() + ". Please contact your administrator.",
+                    HttpStatus.FORBIDDEN);
         }
 
         // Package gate: runs only after the password is verified, so it

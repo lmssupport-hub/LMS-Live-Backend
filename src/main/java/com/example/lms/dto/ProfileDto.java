@@ -52,6 +52,10 @@ public class ProfileDto {
         @Size(max = 500, message = "Personal Address must not exceed 500 characters.")
         private String personalAddress;
 
+        /** Only applied when an admin edits another user (All Users > Edit Profile); ignored on /api/profile/me. */
+        @Size(max = 100, message = "Department must not exceed 100 characters.")
+        private String department;
+
         @Size(max = 100, message = "Country must not exceed 100 characters.")
         private String country;
 
@@ -93,6 +97,7 @@ public class ProfileDto {
         private String email;
         private String role;
         private boolean active;
+        private String department;
 
         private String organizationName;
         private String organizationAddress;

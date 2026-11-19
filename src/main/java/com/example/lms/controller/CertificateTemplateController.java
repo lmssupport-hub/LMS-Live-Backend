@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/certificate-template")
 @SecurityRequirement(name = "bearerAuth")
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize("isAuthenticated()")
 public class CertificateTemplateController {
 
     private final CertificateTemplateService service;
@@ -28,6 +28,7 @@ public class CertificateTemplateController {
 
     /** The saved design, or data = null when none was saved yet (the designer then shows its default design). */
     @GetMapping
+    @PreAuthorize("@perm.can(authentication, 'CERTIFICATE_MGMT_TEMPLATE', 'read')")
     @Operation(summary = "Get the certificate design of my organization (data is null until one is saved)")
     public ResponseEntity<ApiResponse<CertificateTemplateDto.Response>> get() {
         return ResponseEntity.ok(ApiResponse.success("Certificate template fetched successfully.",
@@ -36,6 +37,7 @@ public class CertificateTemplateController {
 
     /** Save (create or replace) the design. */
     @PutMapping
+    @PreAuthorize("@perm.can(authentication, 'CERTIFICATE_MGMT_TEMPLATE', 'update')")
     @Operation(summary = "Save the certificate design of my organization")
     public ResponseEntity<ApiResponse<CertificateTemplateDto.Response>> save(
             @Valid @RequestBody CertificateTemplateDto.SaveRequest request) {

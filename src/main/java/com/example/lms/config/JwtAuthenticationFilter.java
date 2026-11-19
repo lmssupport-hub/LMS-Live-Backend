@@ -72,7 +72,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     /** Active user, and company ADMIN-ku Active package + login access irukkanum. */
     private boolean isSessionAllowed(User user) {
-        if (!Boolean.TRUE.equals(user.getActive())) {
+        if (!Boolean.TRUE.equals(user.getActive()) || user.isDeleted()) {
+            return false;
+        }
+        // Temporarily suspended from All Users: existing sessions stop working immediately.
+        if (user.isSuspendedOn(java.time.LocalDate.now())) {
             return false;
         }
         if (PackageService.isPackageGatedAdmin(user)) {

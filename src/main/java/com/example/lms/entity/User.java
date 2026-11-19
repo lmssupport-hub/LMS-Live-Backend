@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
@@ -112,6 +113,29 @@ public class User {
     @Column(name = "two_fa_last_step")
     private Long twoFaLastStep;
 
+    // User Management (All Users page) -------------------------------------------------
+    /** Free-text department shown in the All Users table. Null until an admin sets it. */
+    @Column(name = "department", length = 100)
+    private String department;
+
+    /**
+     * Temporary suspension window (inclusive). While today is inside it the user cannot log in and
+     * existing sessions are rejected, but {@code active} stays true so the account is untouched
+     * afterwards. Both null = not suspended.
+     */
+    @Column(name = "suspended_from")
+    private LocalDate suspendedFrom;
+
+    @Column(name = "suspended_to")
+    private LocalDate suspendedTo;
+
+    /**
+     * Soft delete marker (All Users > Delete). Rows are kept so payments, certificates and progress
+     * stay intact; the email is anonymised so the address can be invited again.
+     */
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -151,5 +175,17 @@ public class User {
     @Transient
     public boolean isPackageExpired() {
         return packageExpiresAt != null && LocalDateTime.now().isAfter(packageExpiresAt);
+    }
+
+    /** True while today is inside the suspension window. */
+    @Transient
+    public boolean isSuspendedOn(LocalDate today) {
+        return suspendedFrom != null && suspendedTo != null
+                && !today.isBefore(suspendedFrom) && !today.isAfter(suspendedTo);
+    }
+
+    @Transient
+    public boolean isDeleted() {
+        return deletedAt != null;
     }
 }

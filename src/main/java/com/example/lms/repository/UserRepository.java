@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -38,9 +39,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByPackageId(Long packageId);
 
     // NEW - Role Management: users of ONE company who hold a given role.
-    List<User> findByRoleIdAndCompanyAdminId(Long roleId, Long companyAdminId);
+    @Query("SELECT u FROM User u WHERE u.roleId = :roleId AND u.companyAdminId = :companyAdminId AND u.deletedAt IS NULL")
+    List<User> findByRoleIdAndCompanyAdminId(@Param("roleId") Long roleId, @Param("companyAdminId") Long companyAdminId);
 
-    long countByRoleIdAndCompanyAdminId(Long roleId, Long companyAdminId);
+    @Query("SELECT COUNT(u) FROM User u WHERE u.roleId = :roleId AND u.companyAdminId = :companyAdminId AND u.deletedAt IS NULL")
+    long countByRoleIdAndCompanyAdminId(@Param("roleId") Long roleId, @Param("companyAdminId") Long companyAdminId);
 
     /**
      * Heartbeat: refreshes last_seen_at of a user who is online. One bulk UPDATE (no entity load); it never
@@ -52,6 +55,35 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     /** One query for the whole role list: [roleId, count]. */
     @Query("SELECT u.roleId, COUNT(u) FROM User u " +
-           "WHERE u.companyAdminId = :ownerId AND u.roleId IS NOT NULL GROUP BY u.roleId")
+           "WHERE u.companyAdminId = :ownerId AND u.roleId IS NOT NULL AND u.deletedAt IS NULL GROUP BY u.roleId")
     List<Object[]> countUsersByRole(@Param("ownerId") Long ownerId);
+
+    // ------------------------------------------------------------------
+    // User Management (All Users page) - always scoped to ONE company.
+    // status: null = all, otherwise "Active" / "Inactive" / "Suspended"
+    // (Suspended = active account whose suspension window covers :today).
+    // ------------------------------------------------------------------
+    @Query("SELECT u FROM User u WHERE u.companyAdminId = :ownerId AND u.deletedAt IS NULL " +
+           "AND (:search IS NULL OR :search = '' " +
+           "     OR LOWER(CONCAT(u.firstName, ' ', u.lastName)) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(u.email) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(u.role) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(u.department) LIKE LOWER(CONCAT('%', :search, '%'))) " +
+           "AND (:status IS NULL OR :status = '' " +
+           "     OR (:status = 'Inactive' AND u.active = false) " +
+           "     OR (:status = 'Suspended' AND u.active = true " +
+           "         AND u.suspendedFrom <= :today AND u.suspendedTo >= :today) " +
+           "     OR (:status = 'Active' AND u.active = true " +
+           "         AND NOT (u.suspendedFrom IS NOT NULL AND u.suspendedTo IS NOT NULL " +
+           "                  AND u.suspendedFrom <= :today AND u.suspendedTo >= :today)))")
+    Page<User> searchManagedUsers(@Param("ownerId") Long ownerId,
+                                  @Param("search") String search,
+                                  @Param("status") String status,
+                                  @Param("today") LocalDate today,
+                                  Pageable pageable);
+
+    /** One user of ONE company (404 for another company's user -> no id probing). */
+    Optional<User> findByIdAndCompanyAdminIdAndDeletedAtIsNull(Long id, Long companyAdminId);
+
+    List<User> findByIdInAndCompanyAdminIdAndDeletedAtIsNull(java.util.Collection<Long> ids, Long companyAdminId);
 }

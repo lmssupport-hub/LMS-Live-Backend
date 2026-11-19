@@ -52,10 +52,20 @@ public class ProfileService {
     /*  Update                                                            */
     /* ------------------------------------------------------------------ */
 
+    /** Own profile: the department is read-only here (only an admin sets it). */
     @Transactional
     public ProfileDto.Response updateMyProfile(Long userId, ProfileDto.UpdateRequest req) {
+        return updateProfile(userId, req, false);
+    }
+
+    /**
+     * @param byAdmin true only when called from the admin's All Users > Edit Profile. Then the admin may also set
+     *                the user's department and organization (read-only for the user on their own profile).
+     */
+    @Transactional
+    public ProfileDto.Response updateProfile(Long userId, ProfileDto.UpdateRequest req, boolean byAdmin) {
         User user = loadUser(userId);
-        boolean organizationOwner = canEditOrganization(user);
+        boolean organizationOwner = byAdmin || canEditOrganization(user);
 
         // ---- Validate everything first ----
         String timeZone = cleanLine(req.getTimeZone());
@@ -91,6 +101,9 @@ public class ProfileService {
         user.setLastName(req.getLastName().trim());
         user.setCountryCode(countryCode);
         user.setPhoneNumber(phone);
+        if (byAdmin) {
+            user.setDepartment(cleanLine(req.getDepartment()));
+        }
         try {
             userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException e) {
@@ -220,6 +233,10 @@ public class ProfileService {
 
     /** organization / personal may be null (no row yet) - the response then just has null fields. */
     private ProfileDto.Response toResponse(User u, OrganizationDetails org, PersonalDetails p) {
+        // A team member without an organization of their own (e.g. a learner) is shown their company's.
+        if (org == null && u.getCompanyAdminId() != null) {
+            org = organizationRepository.findByUserId(u.getCompanyAdminId()).orElse(null);
+        }
         return ProfileDto.Response.builder()
                 .id(u.getId())
                 .firstName(u.getFirstName())
@@ -227,6 +244,7 @@ public class ProfileService {
                 .email(u.getEmail())
                 .role(u.getRole())
                 .active(Boolean.TRUE.equals(u.getActive()))
+                .department(u.getDepartment())
                 .countryCode(u.getCountryCode())
                 .phoneNumber(u.getPhoneNumber())
                 .organizationName(org == null ? null : org.getOrganizationName())
