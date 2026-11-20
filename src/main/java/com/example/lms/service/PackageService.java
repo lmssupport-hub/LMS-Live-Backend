@@ -566,6 +566,33 @@ public class PackageService {
     }
 
     /**
+     * Saves the billing details the admin edited in Manage Details (one row per user, same table the
+     * purchase writes to). No card data here. Returns the saved values so the screen shows what is stored.
+     */
+    @Transactional
+    public PackageDto.MyBilling updateMyBilling(Long userId, PackageDto.UpdateBillingRequest request) {
+        if (userId == null) {
+            throw new ApiException("User not found", HttpStatus.UNAUTHORIZED);
+        }
+        BillingDetailsEntity entity = billingRepository.findByUserId(userId)
+                .orElseGet(BillingDetailsEntity::new);
+        entity.setUserId(userId);
+        entity.setBillingName(request.getBillingName().trim());
+        entity.setCompanyName(blankToNull(request.getCompanyName()));
+        entity.setEmail(request.getEmail().trim());
+        entity.setAddress(request.getAddress().trim());
+        entity.setCity(request.getCity().trim());
+        entity.setState(blankToNull(request.getState()));
+        entity.setPostalCode(request.getPostalCode().trim());
+        entity.setCountry(request.getCountry().trim());
+        entity.setVatNumber(blankToNull(request.getVatNumber()));
+        BillingDetailsEntity saved = billingRepository.save(entity);
+        return new PackageDto.MyBilling(
+                saved.getBillingName(), saved.getCompanyName(), saved.getEmail(), saved.getAddress(),
+                saved.getCity(), saved.getState(), saved.getPostalCode(), saved.getCountry(), saved.getVatNumber());
+    }
+
+    /**
      * Called right after a new admin signs up. If there is a Free package with
      * "Auto-assign on signup" ON and status Active, the new admin gets it.
      * If none exists, nothing happens (Super Admin can assign manually later).

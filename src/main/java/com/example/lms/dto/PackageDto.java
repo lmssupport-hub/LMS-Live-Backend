@@ -335,6 +335,50 @@ public class PackageDto {
         private LocalDateTime serverTime;
     }
 
+    /**
+     * NEW: body of PUT /api/packages/my-billing (Manage Details -> Billing Details -> Edit).
+     * Same rules as the billing form on the Payment page, but with one "billingName" field
+     * (that is how it is stored), so the admin can correct it without buying a package again.
+     */
+    @Data
+    @NoArgsConstructor
+    public static class UpdateBillingRequest {
+
+        @NotBlank(message = "Billing name is required")
+        @Size(max = 200, message = "Billing name is too long")
+        private String billingName;
+
+        @Size(max = 200, message = "Company name is too long")
+        private String companyName;
+
+        @NotBlank(message = "Billing email is required")
+        @Email(message = "Enter a valid email address")
+        @Size(max = 100, message = "Enter a valid email address")
+        private String email;
+
+        @NotBlank(message = "Billing address is required")
+        @Size(max = 200, message = "Billing address is too long")
+        private String address;
+
+        @NotBlank(message = "City is required")
+        @Size(max = 100, message = "City is too long")
+        private String city;
+
+        @Size(max = 100, message = "State is too long")
+        private String state;
+
+        @NotBlank(message = "Postal code is required")
+        @Size(max = 100, message = "Postal code is too long")
+        private String postalCode;
+
+        @NotBlank(message = "Country is required")
+        @Size(max = 100, message = "Country is too long")
+        private String country;
+
+        @Size(max = 50, message = "VAT number is too long")
+        private String vatNumber;
+    }
+
     /** NEW: response of GET /api/packages/my-billing. All fields null = nothing saved yet. */
     @Data
     @NoArgsConstructor

@@ -127,6 +127,18 @@ public class PackageController {
         return ResponseEntity.ok(packageService.getMyBilling(userIdOf(authentication)));
     }
 
+    /**
+     * NEW: the logged-in admin edits their own saved billing details (Manage Details -> Billing tab).
+     * The user comes from the JWT, never from the body, so nobody can change someone else's details.
+     */
+    @PutMapping("/my-billing")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<PackageDto.MyBilling> updateMyBilling(
+            @Valid @RequestBody PackageDto.UpdateBillingRequest request,
+            Authentication authentication) {
+        return ResponseEntity.ok(packageService.updateMyBilling(userIdOf(authentication), request));
+    }
+
     /** Assigned / expiry dates of the admins on this package. */
     @GetMapping("/{packageId}/admins")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
