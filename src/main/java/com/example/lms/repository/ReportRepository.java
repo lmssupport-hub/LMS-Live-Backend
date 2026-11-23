@@ -120,6 +120,18 @@ public class ReportRepository {
                 .getResultList();
     }
 
+    /** Number of PUBLISHED courses of the organization (what every learner of it can open / join). */
+    public long publishedCourseCount(Long orgId) {
+        return em.createQuery("""
+                select count(c.id)
+                from CourseEntity c
+                where c.organizationId = :orgId
+                  and upper(c.status) = 'PUBLISHED'
+                """, Long.class)
+                .setParameter("orgId", orgId)
+                .getSingleResult();
+    }
+
     /** [userId, lastLoginAt] */
     public List<Object[]> lastLoginPerUser(Long orgId) {
         return em.createQuery("""

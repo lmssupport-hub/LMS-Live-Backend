@@ -97,6 +97,9 @@ public class ReportService {
 
         Map<Long, LocalDateTime> lastLogin = toMap(queries.lastLoginPerUser(orgId));
 
+        // Same number for every learner of the organization.
+        long assignedCourses = queries.publishedCourseCount(orgId);
+
         Map<Long, Long> learnerStudySeconds = new HashMap<>();
         for (Object[] r : queries.studySecondsPerLearner(orgId)) {
             learnerStudySeconds.put(((Number) r[0]).longValue(), ((Number) r[1]).longValue());
@@ -130,6 +133,7 @@ public class ReportService {
                     .completedCourses(completed)
                     .incompleteCourses(incomplete)
                     .enrolledCourses(enrolled)
+                    .assignedCourses(assignedCourses)
                     .averageScore(avgScore)
                     .studyTime(formatDuration(learnerStudySeconds.getOrDefault(userId, 0L)))
                     .totalTimeOnPlatform(formatDuration(u[6] == null ? 0L : ((Number) u[6]).longValue()))

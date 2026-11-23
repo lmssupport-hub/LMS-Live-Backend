@@ -63,6 +63,9 @@ public class ReportDto {
         /** In Progress + Not Started enrollments. */
         private long incompleteCourses;
         private long enrolledCourses;
+        /** Courses available to the learner = every PUBLISHED course of the organization
+         *  (a learner can see and join all of them - CourseService.getCoursesForLearner). */
+        private long assignedCourses;
         /** Average of enrollments.score_percent (2 decimals). Null = no score yet. */
         private Double averageScore;
         /** Sum of study_time over the organization's courses, e.g. "3h 20m". */
