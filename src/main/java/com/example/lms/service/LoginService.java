@@ -175,7 +175,16 @@ public class LoginService {
     /** POST /api/auth/heartbeat - the browser is still open; counted as online for the next 2 minutes. */
     @Transactional
     public void heartbeat(Long userId) {
-        userRepository.touchLastSeen(userId, LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        // Time on platform: the gap since the previous heartbeat counts only if the browser stayed open
+        // (heartbeats come every ~45 s; a gap over 2 minutes = it was closed, so nothing is added).
+        userRepository.findLastSeenAtIfOnline(userId).ifPresent(previous -> {
+            long gap = java.time.Duration.between(previous, now).getSeconds();
+            if (gap > 0 && gap <= 120) {
+                userRepository.addPlatformSeconds(userId, Math.min(gap, 90));
+            }
+        });
+        userRepository.touchLastSeen(userId, now);
     }
 
     /** POST /api/auth/logout - the user is no longer "online" on the dashboard. */

@@ -80,6 +80,13 @@ public class User {
     @Column(name = "last_seen_at")
     private LocalDateTime lastSeenAt;
 
+    // Total seconds the user has had the app open while logged in (Learner Report "Total Time on Platform").
+    // Added by the server from the gap between two heartbeats (LoginService.heartbeat).
+    // columnDefinition has a default so ddl-auto=update can add the column to a table that already has rows.
+    @Column(name = "platform_seconds", nullable = false, columnDefinition = "bigint not null default 0")
+    @Builder.Default
+    private Long platformSeconds = 0L;
+
     // NEW - set only for team members created via an invite (InviteEntity /
     // InviteService). Points at the ADMIN who invited them. This is how
     // multi-company scoping works: an admin's team = every User whose

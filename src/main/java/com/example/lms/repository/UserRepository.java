@@ -53,6 +53,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("UPDATE User u SET u.lastSeenAt = :now WHERE u.id = :id AND u.online = true")
     int touchLastSeen(@Param("id") Long id, @Param("now") LocalDateTime now);
 
+    /** Previous heartbeat time of a user who is online (empty = offline / never seen). */
+    @Query("SELECT u.lastSeenAt FROM User u WHERE u.id = :id AND u.online = true")
+    java.util.Optional<LocalDateTime> findLastSeenAtIfOnline(@Param("id") Long id);
+
+    /** Atomic add to the user's total time on the platform. */
+    @Modifying
+    @Query("UPDATE User u SET u.platformSeconds = u.platformSeconds + :seconds WHERE u.id = :id")
+    int addPlatformSeconds(@Param("id") Long id, @Param("seconds") long seconds);
+
     /** One query for the whole role list: [roleId, count]. */
     @Query("SELECT u.roleId, COUNT(u) FROM User u " +
            "WHERE u.companyAdminId = :ownerId AND u.roleId IS NOT NULL AND u.deletedAt IS NULL GROUP BY u.roleId")
