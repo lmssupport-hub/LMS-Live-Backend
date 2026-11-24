@@ -127,6 +127,33 @@ public class ResendEmailService implements PasswordResetEmailService {
         }
     }
 
+    // NEW - Bulk import users: account already exists, user only has to set a password.
+    @Override
+    public void sendWelcomeSetPasswordEmail(String toEmail, String setPasswordLink, String roleName, int expiryMinutes) {
+        Map<String, Object> payload = Map.of(
+                "from", fromName + " <" + fromEmail + ">",
+                "to", new String[]{toEmail},
+                "subject", "Your LMS account is ready - set your password",
+                "html", buildWelcomeHtml(setPasswordLink, roleName, expiryMinutes)
+        );
+
+        try {
+            webClient.post()
+                    .uri("")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .bodyValue(payload)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .retryWhen(Retry.backoff(maxRetries, Duration.ofMillis(300))
+                            .filter(this::isRetryable))
+                    .block(Duration.ofMillis(timeoutMs * (maxRetries + 1)));
+        } catch (Exception e) {
+            log.error("Resend welcome email dispatch failed for {}: {}", maskEmail(toEmail), e.getMessage());
+            throw new ApiException("Unable to send the welcome email.", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
     // NEW - 2FA one-time code (login / enable / disable). Same webClient/retry/timeout plumbing as above.
     // The OTP is never logged - only the masked recipient.
     @Override
@@ -201,6 +228,20 @@ public class ResendEmailService implements PasswordResetEmailService {
                 + "<p>Or copy and paste this link into your browser:<br>" + signupLink + "</p>"
                 + "<p>This link expires in " + expiryHours + " hours. "
                 + "If you weren't expecting this, you can ignore this email.</p>"
+                + "</div>";
+    }
+
+    private String buildWelcomeHtml(String link, String roleName, int expiryMinutes) {
+        int expiryHours = Math.max(1, expiryMinutes / 60);
+        return "<div style=\"font-family:sans-serif\">"
+                + "<h2>Welcome to LMS</h2>"
+                + "<p>An account has been created for you as <b>" + roleName + "</b>.</p>"
+                + "<p><a href=\"" + link + "\" "
+                + "style=\"display:inline-block;padding:10px 20px;background:#4694A4;"
+                + "color:#ffffff;text-decoration:none;border-radius:6px;\">Set your password</a></p>"
+                + "<p>Or copy and paste this link into your browser:<br>" + link + "</p>"
+                + "<p>This link expires in " + expiryHours + " hours. After that, use "
+                + "\"Forgot password\" on the login page.</p>"
                 + "</div>";
     }
 

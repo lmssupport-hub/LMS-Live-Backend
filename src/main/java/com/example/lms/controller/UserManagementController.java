@@ -3,7 +3,9 @@ package com.example.lms.controller;
 import com.example.lms.config.AuthPrincipal;
 import com.example.lms.dto.ApiResponse;
 import com.example.lms.dto.ProfileDto;
+import com.example.lms.dto.UserImportDto;
 import com.example.lms.dto.UserManagementDto;
+import com.example.lms.service.UserImportService;
 import com.example.lms.service.UserManagementService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class UserManagementController {
 
     private final UserManagementService userManagementService;
+    private final UserImportService userImportService;
 
     @PreAuthorize("@perm.can(authentication, 'USER_MGMT_ALL_USERS', 'read')")
     @GetMapping
@@ -80,6 +83,29 @@ public class UserManagementController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Users deleted successfully.",
                 userManagementService.bulkDelete(principal.getId(), request.getIds())));
+    }
+
+    /* ---- Bulk import (Bulk Users > Import users) ---- */
+
+    @PreAuthorize("@perm.can(authentication, 'USER_MGMT_ALL_USERS', 'update')")
+    @GetMapping("/import/template")
+    public ResponseEntity<byte[]> importTemplate() {
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"users-import-template.xlsx\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(userImportService.buildTemplate());
+    }
+
+    @PreAuthorize("@perm.can(authentication, 'USER_MGMT_ALL_USERS', 'update')")
+    @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<UserImportDto.Result>> importUsers(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @RequestPart("file") MultipartFile file) {
+        UserImportDto.Result result = userImportService.importUsers(principal.getId(), file);
+        return ResponseEntity.ok(ApiResponse.success(
+                result.getImported() + " of " + result.getTotal() + " users imported.", result));
     }
 
     /* ---- Edit Profile of the clicked user (same shapes as /api/profile/me) ---- */
