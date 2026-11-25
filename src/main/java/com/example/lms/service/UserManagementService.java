@@ -1,11 +1,19 @@
 package com.example.lms.service;
 
 import com.example.lms.dto.ProfileDto;
+import com.example.lms.dto.UserImportDto;
 import com.example.lms.dto.UserManagementDto;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -16,13 +24,18 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Comparator;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * "All Users" page: list / status / delete / edit-profile of the team members of ONE company.
@@ -45,6 +58,8 @@ public class UserManagementService {
     private static final String ACTIVE = "Active";
     private static final String INACTIVE = "Inactive";
     private static final String SUSPENDED = "Suspended";
+    private static final int DELETE_IMPORT_MAX_ROWS = 500;
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
     private final UserRepository userRepository;
     private final ProfileService profileService;
@@ -164,6 +179,129 @@ public class UserManagementService {
                 .deleted(deletedIds.size())
                 .skipped(skipped)
                 .build();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Bulk delete via Excel (one email per row)                         */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Deletes (soft delete, same as the normal delete) every user whose email is listed in the sheet.
+     * A row is rejected - and reported with its reason - when the email is invalid, appears twice,
+     * is the caller's own account, or does not belong to a (non-deleted) user of the caller's company.
+     * Valid rows are deleted even when other rows fail.
+     */
+    @Transactional
+    public UserManagementDto.BulkDeleteImportResult bulkDeleteImport(Long actorId, MultipartFile file) {
+        User actor = requireManager(actorId);
+        Long ownerId = PackageService.resolveOwnerId(actor);
+
+        if (file == null || file.isEmpty()) {
+            throw new ApiException("Please choose an Excel file.", HttpStatus.BAD_REQUEST);
+        }
+        String fileName = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase();
+        if (!fileName.endsWith(".xlsx")) {
+            throw new ApiException("Only .xlsx files are supported. Download the sample template.", HttpStatus.BAD_REQUEST);
+        }
+
+        // (row number, email) pairs, blank rows skipped.
+        List<Object[]> rows = new ArrayList<>();
+        DataFormatter fmt = new DataFormatter();
+        try (InputStream in = file.getInputStream(); Workbook wb = new XSSFWorkbook(in)) {
+            Sheet sheet = wb.getSheetAt(0);
+            org.apache.poi.ss.usermodel.Row header = sheet.getRow(0);
+            String head = header == null ? "" : fmt.formatCellValue(header.getCell(0)).replace("*", "").trim();
+            if (!"Email".equalsIgnoreCase(head)) {
+                throw new ApiException("Header row does not match the sample template (expected 'Email' in column 1).",
+                        HttpStatus.BAD_REQUEST);
+            }
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) {
+                org.apache.poi.ss.usermodel.Row row = sheet.getRow(i);
+                String email = row == null ? "" : fmt.formatCellValue(row.getCell(0)).trim().toLowerCase();
+                if (email.isEmpty()) continue;
+                if (rows.size() >= DELETE_IMPORT_MAX_ROWS) {
+                    throw new ApiException("A file can contain at most " + DELETE_IMPORT_MAX_ROWS + " rows.",
+                            HttpStatus.BAD_REQUEST);
+                }
+                rows.add(new Object[]{i + 1, email});
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            log.warn("Delete import: unreadable workbook: {}", e.getMessage());
+            throw new ApiException("The file could not be read. Please use the sample template (.xlsx).", HttpStatus.BAD_REQUEST);
+        }
+        if (rows.isEmpty()) {
+            throw new ApiException("No rows found in the file.", HttpStatus.BAD_REQUEST);
+        }
+
+        List<UserImportDto.RowError> errors = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        int deleted = 0;
+        for (Object[] r : rows) {
+            int rowNo = (Integer) r[0];
+            String email = (String) r[1];
+            if (!EMAIL_PATTERN.matcher(email).matches() || email.length() > 100) {
+                errors.add(new UserImportDto.RowError(rowNo, email, "Enter a valid email address."));
+                continue;
+            }
+            if (!seen.add(email)) {
+                errors.add(new UserImportDto.RowError(rowNo, email, "Duplicate row inside the file."));
+                continue;
+            }
+            User target = userRepository.findByEmailIgnoreCase(email)
+                    .filter(u -> u.getDeletedAt() == null && java.util.Objects.equals(u.getCompanyAdminId(), ownerId))
+                    .orElse(null);
+            if (target == null) {
+                errors.add(new UserImportDto.RowError(rowNo, email, "No user with this email in your organization."));
+                continue;
+            }
+            if (target.getId().equals(actor.getId())) {
+                errors.add(new UserImportDto.RowError(rowNo, email, "You cannot delete your own account."));
+                continue;
+            }
+            softDelete(target);
+            deleted++;
+        }
+        errors.sort(Comparator.comparingInt(UserImportDto.RowError::getRow));
+        log.info("{} user(s) deleted via Excel by {}", deleted, actor.getId());
+        return UserManagementDto.BulkDeleteImportResult.builder()
+                .total(rows.size()).deleted(deleted).failed(errors.size()).errors(errors).build();
+    }
+
+    public byte[] bulkDeleteTemplate() {
+        try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = wb.createSheet("Delete users");
+            Font bold = wb.createFont();
+            bold.setBold(true);
+            CellStyle head = wb.createCellStyle();
+            head.setFont(bold);
+            CellStyle text = wb.createCellStyle();
+            text.setDataFormat(wb.createDataFormat().getFormat("@"));
+
+            Cell h = sheet.createRow(0).createCell(0);
+            h.setCellValue("Email*");
+            h.setCellStyle(head);
+            sheet.setDefaultColumnStyle(0, text);
+            sheet.setColumnWidth(0, 9000);
+            Cell sample = sheet.createRow(1).createCell(0);
+            sample.setCellStyle(text);
+            sample.setCellValue("asha.kumar@example.com");
+
+            Sheet help = wb.createSheet("Instructions");
+            String[] lines = {
+                    "List one email per row in the 'Delete users' sheet. Delete the sample row first.",
+                    "Every listed user of your organization is deleted. Deleted users cannot log in any more.",
+                    "Rows with an invalid email, a duplicate, your own email, or an email that is not a user of your organization are skipped and listed with the reason.",
+                    "Maximum " + DELETE_IMPORT_MAX_ROWS + " rows per file. Do not rename the header."};
+            for (int i = 0; i < lines.length; i++) help.createRow(i).createCell(0).setCellValue(lines[i]);
+            help.setColumnWidth(0, 16000);
+
+            wb.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new ApiException("Unable to create the template.", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
     }
 
     /* ------------------------------------------------------------------ */

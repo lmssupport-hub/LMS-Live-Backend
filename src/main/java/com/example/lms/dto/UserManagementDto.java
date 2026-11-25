@@ -83,4 +83,18 @@ public final class UserManagementDto {
         /** Ids that were not deleted (not in this company / already deleted). */
         private List<Long> skipped;
     }
+
+    /** POST /api/users/bulk-delete/import response (Excel: one email per row). */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class BulkDeleteImportResult {
+        /** Data rows found in the sheet (blank rows ignored). */
+        private int total;
+        private int deleted;
+        /** Rows rejected - see {@code errors}. */
+        private int failed;
+        private List<UserImportDto.RowError> errors;
+    }
 }

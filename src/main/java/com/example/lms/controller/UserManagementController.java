@@ -85,6 +85,28 @@ public class UserManagementController {
                 userManagementService.bulkDelete(principal.getId(), request.getIds())));
     }
 
+    /* ---- Bulk delete via Excel (Bulk Users > Delete users) ---- */
+
+    @PreAuthorize("@perm.can(authentication, 'USER_MGMT_ALL_USERS', 'delete')")
+    @GetMapping("/bulk-delete/template")
+    public ResponseEntity<byte[]> bulkDeleteTemplate() {
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"delete-users-template.xlsx\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(userManagementService.bulkDeleteTemplate());
+    }
+
+    @PreAuthorize("@perm.can(authentication, 'USER_MGMT_ALL_USERS', 'delete')")
+    @PostMapping(value = "/bulk-delete/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<UserManagementDto.BulkDeleteImportResult>> bulkDeleteImport(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @RequestPart("file") MultipartFile file) {
+        UserManagementDto.BulkDeleteImportResult r = userManagementService.bulkDeleteImport(principal.getId(), file);
+        return ResponseEntity.ok(ApiResponse.success(r.getDeleted() + " user(s) deleted.", r));
+    }
+
     /* ---- Bulk import (Bulk Users > Import users) ---- */
 
     @PreAuthorize("@perm.can(authentication, 'USER_MGMT_ALL_USERS', 'update')")

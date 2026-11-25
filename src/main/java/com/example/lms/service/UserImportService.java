@@ -174,7 +174,7 @@ public class UserImportService {
     }
 
     /** Returns false when the mail could not be sent - the user still exists and can use Forgot password. */
-    private boolean sendSetPasswordMail(User user) {
+    boolean sendSetPasswordMail(User user) {
         try {
             String raw = TokenGenerator.generateRawToken();
             tokenRepository.save(PasswordResetToken.builder()
