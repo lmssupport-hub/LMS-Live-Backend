@@ -106,6 +106,18 @@ public class UserManagementService {
         rejectSelf(actor, target, "You cannot change your own status.");
 
         LocalDate today = LocalDate.now();
+        applyStatus(target, req, today);
+
+        userRepository.save(target);
+        log.info("User {} set to {} by {}", target.getId(), req.getStatus(), actor.getId());
+        return toRow(target, today);
+    }
+
+    /**
+     * Active / Inactive / Suspended rules. Shared with Super Admin > Admins
+     * ({@link SuperAdminAdminService}) so both screens behave the same way.
+     */
+    static void applyStatus(User target, UserManagementDto.StatusRequest req, LocalDate today) {
         switch (req.getStatus()) {
             case ACTIVE -> {
                 target.setActive(true);
@@ -137,10 +149,6 @@ public class UserManagementService {
             }
             default -> throw new ApiException("Status must be Active, Inactive or Suspended.", HttpStatus.BAD_REQUEST);
         }
-
-        userRepository.save(target);
-        log.info("User {} set to {} by {}", target.getId(), req.getStatus(), actor.getId());
-        return toRow(target, today);
     }
 
     /* ------------------------------------------------------------------ */
@@ -381,6 +389,12 @@ public class UserManagementService {
      * the email so the same address can be invited again. Name/phone stay for those records.
      */
     private void softDelete(User user) {
+        markDeleted(user);
+        userRepository.save(user);
+    }
+
+    /** The soft-delete field changes (the caller saves). Shared with Super Admin > Admins. */
+    static void markDeleted(User user) {
         user.setActive(false);
         user.setOnline(false);
         clearSuspension(user);
@@ -389,7 +403,6 @@ public class UserManagementService {
         user.setTwoFaEnabled(false);
         user.setTwoFaMethod(null);
         user.setTwoFaSecret(null);
-        userRepository.save(user);
     }
 
     private static String normaliseStatusFilter(String status) {

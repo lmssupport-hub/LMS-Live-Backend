@@ -18,12 +18,21 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByEmailIgnoreCase(String email);
 
     @Query("SELECT u FROM User u WHERE u.role = 'ADMIN' " +
+           "AND u.companyAdminId IS NULL AND u.deletedAt IS NULL " +
            "AND (:active IS NULL OR u.active = :active) " +
            "AND (:search IS NULL OR :search = '' " +
            "     OR LOWER(u.firstName) LIKE LOWER(CONCAT('%', :search, '%')) " +
            "     OR LOWER(u.lastName)  LIKE LOWER(CONCAT('%', :search, '%')) " +
            "     OR LOWER(u.email)     LIKE LOWER(CONCAT('%', :search, '%')))")
     Page<User> findAdmins(@Param("search") String search, @Param("active") Boolean active, Pageable pageable);
+
+    // Super Admin > Admins: a company's own ADMIN (never an invited team member, never a deleted one).
+    Page<User> findByRoleAndCompanyAdminIdIsNullAndDeletedAtIsNull(String role, Pageable pageable);
+
+    Optional<User> findByIdAndRoleAndCompanyAdminIdIsNullAndDeletedAtIsNull(Long id, String role);
+
+    // Super Admin > Admins > Export as CSV
+    List<User> findByRoleAndCompanyAdminIdIsNullAndDeletedAtIsNullOrderByCreatedAtDescIdAsc(String role);
 
     // FIXED - role is stored as "Instructor" in DB, not "INSTRUCTOR", so a plain
     // equality match was returning an empty list. IgnoreCase fixes that.
