@@ -95,7 +95,14 @@ public class CoursePaymentDto {
         private String courseName;
         private String description;
         private String thumbnailUrl;
+        /** Course price as set on the course (before tax, or including it when pricesIncludeTax). */
         private BigDecimal price;
+        /** Tax of the course's organization. taxRate 0 = no tax line. */
+        private BigDecimal taxRate;
+        private BigDecimal taxAmount;
+        private boolean pricesIncludeTax;
+        /** What the learner pays (price + tax, or just price when it already includes tax). */
+        private BigDecimal total;
         private boolean alreadyEnrolled;
     }
 
@@ -106,7 +113,12 @@ public class CoursePaymentDto {
     public static class PurchaseResponse {
         private Long courseId;
         private String courseName;
+        /** Total paid. */
         private BigDecimal amount;
+        private BigDecimal subtotal;
+        private BigDecimal taxRate;
+        private BigDecimal taxAmount;
+        private boolean pricesIncludeTax;
         private LocalDateTime purchasedAt;
         private String enrollmentStatus;
     }

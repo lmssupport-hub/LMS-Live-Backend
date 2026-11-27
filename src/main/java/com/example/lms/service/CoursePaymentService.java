@@ -10,6 +10,7 @@ import com.example.lms.exception.ApiException;
 import com.example.lms.exception.RateLimitExceededException;
 import com.example.lms.repository.CoursePurchaseRepository;
 import com.example.lms.repository.EnrollmentRepository;
+import com.example.lms.util.TaxCalculator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -53,13 +55,16 @@ public class CoursePaymentService {
     private final CourseAccessService courseAccess;
     private final EnrollmentRepository enrollmentRepository;
     private final CoursePurchaseRepository purchaseRepository;
+    private final InvoiceSettingService invoiceSettings;
 
     public CoursePaymentService(CourseAccessService courseAccess,
                                 EnrollmentRepository enrollmentRepository,
-                                CoursePurchaseRepository purchaseRepository) {
+                                CoursePurchaseRepository purchaseRepository,
+                                InvoiceSettingService invoiceSettings) {
         this.courseAccess = courseAccess;
         this.enrollmentRepository = enrollmentRepository;
         this.purchaseRepository = purchaseRepository;
+        this.invoiceSettings = invoiceSettings;
     }
 
     /** Data for the Payment page's Order Summary. Only a PUBLISHED, PAID course of the caller's own organization. */
@@ -67,12 +72,17 @@ public class CoursePaymentService {
     public CoursePaymentDto.CheckoutResponse getCheckout(Long courseId) {
         User user = courseAccess.currentUser();
         CourseEntity course = requirePayableCourse(user, courseId);
+        TaxCalculator.Breakdown bill = billFor(course);
         return CoursePaymentDto.CheckoutResponse.builder()
                 .courseId(course.getId())
                 .courseName(course.getName())
                 .description(course.getDescription())
                 .thumbnailUrl(course.getThumbnailUrl())
                 .price(course.getPrice())
+                .taxRate(bill.taxRate())
+                .taxAmount(bill.taxAmount())
+                .pricesIncludeTax(bill.pricesIncludeTax())
+                .total(bill.total())
                 .alreadyEnrolled(enrollmentRepository.existsByCourseIdAndUserId(courseId, user.getId()))
                 .build();
     }
@@ -90,7 +100,8 @@ public class CoursePaymentService {
         verifyTestPayment(user.getId(), request);
 
         LocalDateTime now = LocalDateTime.now();
-        purchaseRepository.save(toPurchase(user, course, request.getBilling(), now));
+        TaxCalculator.Breakdown bill = billFor(course);   // price + tax from the DB, never from the request
+        purchaseRepository.save(toPurchase(user, course, bill, request.getBilling(), now));
 
         try {
             enrollmentRepository.saveAndFlush(EnrollmentEntity.builder()
@@ -105,12 +116,17 @@ public class CoursePaymentService {
         }
 
         failedPayments.remove(user.getId());
-        log.info("Course purchased. userId={}, courseId={}, amount={}", user.getId(), courseId, course.getPrice());
+        log.info("Course purchased. userId={}, courseId={}, total={}, tax={}",
+                user.getId(), courseId, bill.total(), bill.taxAmount());
 
         return CoursePaymentDto.PurchaseResponse.builder()
                 .courseId(courseId)
                 .courseName(course.getName())
-                .amount(course.getPrice())
+                .amount(bill.total())
+                .subtotal(bill.subtotal())
+                .taxRate(bill.taxRate())
+                .taxAmount(bill.taxAmount())
+                .pricesIncludeTax(bill.pricesIncludeTax())
                 .purchasedAt(now)
                 .enrollmentStatus(EnrollmentStatus.NOT_STARTED.name())
                 .build();
@@ -162,14 +178,25 @@ public class CoursePaymentService {
         return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
 
-    private CoursePurchaseEntity toPurchase(User user, CourseEntity course,
+    /** Course price + the tax of the course's organization (Invoice Setup). No setup saved = no tax. */
+    private TaxCalculator.Breakdown billFor(CourseEntity course) {
+        return invoiceSettings.findForOrganization(course.getOrganizationId())
+                .map(s -> TaxCalculator.calculate(course.getPrice(), s.getTaxRate(), s.isPricesIncludeTax()))
+                .orElseGet(() -> TaxCalculator.calculate(course.getPrice(), BigDecimal.ZERO, false));
+    }
+
+    private CoursePurchaseEntity toPurchase(User user, CourseEntity course, TaxCalculator.Breakdown bill,
                                             CoursePaymentDto.BillingRequest b, LocalDateTime now) {
         CoursePurchaseEntity p = new CoursePurchaseEntity();
         p.setUserId(user.getId());
         p.setCourseId(course.getId());
         p.setOrganizationId(course.getOrganizationId());
         p.setCourseName(course.getName());
-        p.setAmount(course.getPrice());          // price from the DB, never from the request
+        p.setAmount(bill.total());               // total paid = price (+ tax); from the DB, never from the request
+        p.setSubtotal(bill.subtotal());
+        p.setTaxRate(bill.taxRate());
+        p.setTaxAmount(bill.taxAmount());
+        p.setPricesIncludeTax(bill.pricesIncludeTax());
         p.setBillingName(resolveBillingName(b, user));
         p.setCompanyName(blankToNull(b.getCompanyName()));
         p.setBillingEmail(b.getEmail().trim());

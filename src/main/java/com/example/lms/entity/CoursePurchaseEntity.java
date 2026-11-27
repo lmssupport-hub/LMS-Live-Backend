@@ -53,6 +53,24 @@ public class CoursePurchaseEntity {
     private BigDecimal amount;
 
     // ---- billing snapshot (display only) ----
+    // ---- tax snapshot (the invoice setup may change later; old purchases keep what was charged) ----
+    // "amount" above is the TOTAL the learner paid. These are null for purchases made before tax existed.
+
+    /** Price without tax. */
+    @Column(name = "subtotal", precision = 10, scale = 2)
+    private BigDecimal subtotal;
+
+    /** Tax rate in percent that was applied. */
+    @Column(name = "tax_rate", precision = 5, scale = 2)
+    private BigDecimal taxRate;
+
+    @Column(name = "tax_amount", precision = 10, scale = 2)
+    private BigDecimal taxAmount;
+
+    /** true = the course price already contained the tax. */
+    @Column(name = "prices_include_tax", nullable = false, columnDefinition = "boolean default false")
+    private boolean pricesIncludeTax;
+
     @Column(name = "billing_name", nullable = false, length = 200)
     private String billingName;
 
