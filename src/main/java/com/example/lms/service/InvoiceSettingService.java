@@ -5,6 +5,7 @@ import com.example.lms.entity.InvoiceSettingEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.repository.InvoiceSettingRepository;
+import com.example.lms.util.InvoiceLabels;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -27,11 +28,7 @@ public class InvoiceSettingService {
     private static final Logger log = LoggerFactory.getLogger(InvoiceSettingService.class);
 
     /** Label keys the Angular page offers - same keys as textGroups in invoice-setup.ts. */
-    static final Set<String> KNOWN_TEXT_KEYS = Set.of(
-            "invoiceNumber", "invoice", "invoiceDate", "customerDetails", "description", "unitPrice", "quantity",
-            "subtotal", "price", "discount", "totalAmount", "website", "email",
-            "pricesIncludeTax", "tax", "taxIncluded", "refundReason", "refundMethod", "invoiceReference", "refundedAmount",
-            "paid", "refunded", "pending", "completed");
+    static final Set<String> KNOWN_TEXT_KEYS = InvoiceLabels.DEFAULTS.keySet();
 
     private final InvoiceSettingRepository repository;
     private final CourseAccessService access;

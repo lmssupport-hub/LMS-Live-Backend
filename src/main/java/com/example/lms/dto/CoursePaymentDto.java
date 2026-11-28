@@ -119,6 +119,9 @@ public class CoursePaymentDto {
         private BigDecimal taxRate;
         private BigDecimal taxAmount;
         private boolean pricesIncludeTax;
+        /** null = no invoice was issued (built-in invoicing is off for this organization). */
+        private Long invoiceId;
+        private String invoiceNumber;
         private LocalDateTime purchasedAt;
         private String enrollmentStatus;
     }

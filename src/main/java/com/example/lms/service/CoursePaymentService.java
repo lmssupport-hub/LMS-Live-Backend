@@ -5,6 +5,7 @@ import com.example.lms.entity.CourseEntity;
 import com.example.lms.entity.CoursePurchaseEntity;
 import com.example.lms.entity.EnrollmentEntity;
 import com.example.lms.entity.EnrollmentStatus;
+import com.example.lms.entity.InvoiceEntity;
 import com.example.lms.entity.User;
 import com.example.lms.exception.ApiException;
 import com.example.lms.exception.RateLimitExceededException;
@@ -24,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -56,15 +58,18 @@ public class CoursePaymentService {
     private final EnrollmentRepository enrollmentRepository;
     private final CoursePurchaseRepository purchaseRepository;
     private final InvoiceSettingService invoiceSettings;
+    private final InvoiceService invoiceService;
 
     public CoursePaymentService(CourseAccessService courseAccess,
                                 EnrollmentRepository enrollmentRepository,
                                 CoursePurchaseRepository purchaseRepository,
-                                InvoiceSettingService invoiceSettings) {
+                                InvoiceSettingService invoiceSettings,
+                                InvoiceService invoiceService) {
         this.courseAccess = courseAccess;
         this.enrollmentRepository = enrollmentRepository;
         this.purchaseRepository = purchaseRepository;
         this.invoiceSettings = invoiceSettings;
+        this.invoiceService = invoiceService;
     }
 
     /** Data for the Payment page's Order Summary. Only a PUBLISHED, PAID course of the caller's own organization. */
@@ -101,7 +106,7 @@ public class CoursePaymentService {
 
         LocalDateTime now = LocalDateTime.now();
         TaxCalculator.Breakdown bill = billFor(course);   // price + tax from the DB, never from the request
-        purchaseRepository.save(toPurchase(user, course, bill, request.getBilling(), now));
+        CoursePurchaseEntity purchase = purchaseRepository.save(toPurchase(user, course, bill, request.getBilling(), now));
 
         try {
             enrollmentRepository.saveAndFlush(EnrollmentEntity.builder()
@@ -115,6 +120,9 @@ public class CoursePaymentService {
             throw new ApiException("You are already enrolled in this course. Please refresh.", HttpStatus.CONFLICT);
         }
 
+        // same transaction: purchase + enrollment + invoice (+ next invoice number) are saved together
+        Optional<InvoiceEntity> invoice = invoiceService.issueFor(purchase);
+
         failedPayments.remove(user.getId());
         log.info("Course purchased. userId={}, courseId={}, total={}, tax={}",
                 user.getId(), courseId, bill.total(), bill.taxAmount());
@@ -127,6 +135,8 @@ public class CoursePaymentService {
                 .taxRate(bill.taxRate())
                 .taxAmount(bill.taxAmount())
                 .pricesIncludeTax(bill.pricesIncludeTax())
+                .invoiceId(invoice.map(InvoiceEntity::getId).orElse(null))
+                .invoiceNumber(invoice.map(InvoiceEntity::getInvoiceNumber).orElse(null))
                 .purchasedAt(now)
                 .enrollmentStatus(EnrollmentStatus.NOT_STARTED.name())
                 .build();
